@@ -40,10 +40,13 @@ target_sources(AppModule
         ${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm
         src/app.cppm
         src/extra.cppm
-        src/my_helper_impl.cppm
+        src/VulkanWindow.cppm
         src/VulkanDevice.cppm
         src/VulkanInstance.cppm
+        src/VulkanPipeline.cppm
+        src/types.cppm
         src/mesh.cppm
+        src/scene.cppm
 )
 
 target_sources(AppModule

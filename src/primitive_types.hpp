@@ -22,7 +22,6 @@ using i64 = std::int64_t; // 64-bit signed
 // ==============================================
 // Size-specific aliases
 // ==============================================
-
 using usize = std::size_t;    // Typical size type
 using ssize = std::ptrdiff_t; // Signed size type
 

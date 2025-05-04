@@ -17,8 +17,14 @@ import std;
 import :DDX;
 import :VulkanDevice;
 import :VulkanInstance;
+import :VulkanPipeline;
 import :extra;
 import :mesh;
+import :scene;
+
+namespace {
+constexpr uint32_t minImageCount = 2;
+}
 
 void check_vk_result(VkResult err) {
   if (err == VK_SUCCESS)
@@ -38,16 +44,16 @@ void check_vk_result_hpp(vk::Result err) {
 export class App {
   VulkanInstance instance;
   VulkanDevice device{instance};
+  VulkanPipeline graphicsPipeline;
+
+  std::vector<vk::raii::ShaderModule> shaders;
 
   Window wd;
-  uint32_t minImageCount = 2;
   bool swapChainRebuild = false;
   u32 rebuild_counter{0};
 
   vk::raii::DescriptorSetLayout descriptorSetLayout{nullptr};
   vk::raii::PipelineCache pipelineCache{nullptr};
-  vk::raii::PipelineLayout pipelineLayout{nullptr};
-  vk::raii::Pipeline graphicsPipeline{nullptr};
 
   std::vector<Mesh> meshes;          // All actual renderable meshes
   std::vector<Transform> transforms; // All transforms (indexed for clarity)
@@ -69,164 +75,6 @@ export class App {
   int frameCap = 120;
   float targetFrameDuration = 1.0f / static_cast<float>(frameCap);
 
-  std::expected<std::vector<uint32_t>, std::string>
-  readSpirvFile(const std::string &filename) NOEXCEPT {
-    std::ifstream file(filename, std::ios::ate | std::ios::binary);
-    if (!file.is_open()) {
-      return std::unexpected("Failed to open file: " + filename);
-    }
-
-    std::size_t fileSize = file.tellg();
-    std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
-
-    file.seekg(0);
-    file.read(reinterpret_cast<char *>(buffer.data()), fileSize);
-    file.close();
-
-    return buffer;
-  }
-
-  std::expected<vk::raii::ShaderModule, std::string>
-  createShaderModule(const std::vector<uint32_t> &spirvCode) NOEXCEPT {
-    if (auto expected = device.logical().createShaderModule({
-            .codeSize = spirvCode.size() * sizeof(uint32_t),
-            .pCode = spirvCode.data(),
-        });
-        expected) {
-      return std::move(*expected);
-    } else {
-      return std::unexpected("Failed to create shader module: " + vk::to_string(expected.error()));
-    }
-  }
-
-  std::expected<void, std::string> createGraphicsPipeline() NOEXCEPT {
-    auto vertexSpirv = readSpirvFile("shaders/vert.spv");
-    if (!vertexSpirv) {
-      return std::unexpected(vertexSpirv.error());
-    }
-
-    auto fragmentSpirv = readSpirvFile("shaders/frag.spv");
-    if (!fragmentSpirv) {
-      return std::unexpected(fragmentSpirv.error());
-    }
-
-    auto vertexShaderModule = createShaderModule(*vertexSpirv);
-    if (!vertexShaderModule) {
-      return std::unexpected(vertexShaderModule.error());
-    }
-
-    auto fragmentShaderModule = createShaderModule(*fragmentSpirv);
-    if (!fragmentShaderModule) {
-      return std::unexpected(fragmentShaderModule.error());
-    }
-
-    vk::PipelineShaderStageCreateInfo shaderStages[] = {
-        {
-            .stage = vk::ShaderStageFlagBits::eVertex,
-            .module = **vertexShaderModule,
-            .pName = "main",
-        },
-        {
-            .stage = vk::ShaderStageFlagBits::eFragment,
-            .module = **fragmentShaderModule,
-            .pName = "main",
-        },
-    };
-
-    vk::VertexInputBindingDescription bindingDescription{
-        .binding = 0,
-        .stride = sizeof(Vertex),
-        .inputRate = vk::VertexInputRate::eVertex,
-    };
-
-    std::array<vk::VertexInputAttributeDescription, 3> attributes = {
-        {{0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
-         {1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)},
-         {2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv)}}};
-
-    vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
-        .vertexBindingDescriptionCount = 1,
-        .pVertexBindingDescriptions = &bindingDescription,
-        .vertexAttributeDescriptionCount = 3,
-        .pVertexAttributeDescriptions = attributes.data(),
-    };
-
-    vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
-        .topology = vk::PrimitiveTopology::eTriangleList,
-        .primitiveRestartEnable = false,
-    };
-
-    vk::PipelineViewportStateCreateInfo viewportState{
-        .viewportCount = 1,
-        .scissorCount = 1,
-    };
-
-    vk::PipelineRasterizationStateCreateInfo rasterizer{
-        .polygonMode = vk::PolygonMode::eFill,
-        .cullMode = vk::CullModeFlagBits::eNone,
-        .frontFace = vk::FrontFace::eClockwise,
-        .lineWidth = 1.0f,
-    };
-
-    vk::PipelineMultisampleStateCreateInfo multisampling{};
-
-    vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-        .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
-    };
-
-    vk::PipelineColorBlendStateCreateInfo colorBlending{
-        .attachmentCount = 1,
-        .pAttachments = &colorBlendAttachment,
-    };
-
-    vk::DynamicState dynamicStates[] = {
-        vk::DynamicState::eViewport,
-        vk::DynamicState::eScissor,
-    };
-
-    vk::PipelineDynamicStateCreateInfo dynamicState{
-        .dynamicStateCount = 2,
-        .pDynamicStates = dynamicStates,
-    };
-
-    vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-        .setLayoutCount = 1,
-        .pSetLayouts = &*descriptorSetLayout,
-    };
-
-    if (auto expected = device.logical().createPipelineLayout(pipelineLayoutInfo); expected) {
-      pipelineLayout = std::move(*expected);
-    } else {
-      return std::unexpected("Failed to create pipeline layout: " +
-                             vk::to_string(expected.error()));
-    }
-
-    vk::GraphicsPipelineCreateInfo pipelineInfo{
-        .stageCount = 2,
-        .pStages = shaderStages,
-        .pVertexInputState = &vertexInputInfo,
-        .pInputAssemblyState = &inputAssembly,
-        .pViewportState = &viewportState,
-        .pRasterizationState = &rasterizer,
-        .pMultisampleState = &multisampling,
-        .pColorBlendState = &colorBlending,
-        .pDynamicState = &dynamicState,
-        .layout = *pipelineLayout,
-        .renderPass = wd.RenderPass,
-        .subpass = 0,
-    };
-
-    if (auto expected = device.logical().createGraphicsPipeline(nullptr, pipelineInfo); expected) {
-      graphicsPipeline = std::move(*expected);
-      std::println("Graphics pipeline created successfully!");
-      return {};
-    } else {
-      return std::unexpected("Failed to create graphics pipeline: " +
-                             vk::to_string(expected.error()));
-    }
-  }
-
   std::expected<void, std::string> createDescriptorSetLayout() NOEXCEPT {
     std::vector<vk::DescriptorSetLayoutBinding> bindings = {
         {0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex},
@@ -246,72 +94,6 @@ export class App {
     }
   }
 
-  std::vector<Vertex> create_cuboid_vertices(float width, float height, float length) {
-    const float w = width / 2.0f;
-    const float h = height / 2.0f;
-    const float l = length / 2.0f;
-
-    std::vector<Vertex> vertices;
-    vertices.reserve(24); // 6 faces * 4 vertices per face
-
-    // Front face (z = -l)
-    vertices.push_back({{-w, -h, -l}, {0, 0, -1}, {0, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, -h, -l}, {0, 0, -1}, {1, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, h, -l}, {0, 0, -1}, {1, 1}, {1, 0, 0, 1}});
-    vertices.push_back({{-w, h, -l}, {0, 0, -1}, {0, 1}, {1, 0, 0, 1}});
-
-    // Back face (z = l)
-    vertices.push_back({{-w, -h, l}, {0, 0, 1}, {0, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, -h, l}, {0, 0, 1}, {1, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, h, l}, {0, 0, 1}, {1, 1}, {1, 0, 0, 1}});
-    vertices.push_back({{-w, h, l}, {0, 0, 1}, {0, 1}, {1, 0, 0, 1}});
-
-    // Left face (x = -w)
-    vertices.push_back({{-w, -h, -l}, {-1, 0, 0}, {0, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{-w, h, -l}, {-1, 0, 0}, {0, 1}, {1, 0, 0, 1}});
-    vertices.push_back({{-w, h, l}, {-1, 0, 0}, {1, 1}, {1, 0, 0, 1}});
-    vertices.push_back({{-w, -h, l}, {-1, 0, 0}, {1, 0}, {1, 0, 0, 1}});
-
-    // Right face (x = w)
-    vertices.push_back({{w, -h, -l}, {1, 0, 0}, {0, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, -h, l}, {1, 0, 0}, {1, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, h, l}, {1, 0, 0}, {1, 1}, {1, 0, 0, 1}});
-    vertices.push_back({{w, h, -l}, {1, 0, 0}, {0, 1}, {1, 0, 0, 1}});
-
-    // Top face (y = h)
-    vertices.push_back({{-w, h, -l}, {0, 1, 0}, {0, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, h, -l}, {0, 1, 0}, {1, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, h, l}, {0, 1, 0}, {1, 1}, {1, 0, 0, 1}});
-    vertices.push_back({{-w, h, l}, {0, 1, 0}, {0, 1}, {1, 0, 0, 1}});
-
-    // Bottom face (y = -h)
-    vertices.push_back({{-w, -h, -l}, {0, -1, 0}, {0, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, -h, -l}, {0, -1, 0}, {1, 0}, {1, 0, 0, 1}});
-    vertices.push_back({{w, -h, l}, {0, -1, 0}, {1, 1}, {1, 0, 0, 1}});
-    vertices.push_back({{-w, -h, l}, {0, -1, 0}, {0, 1}, {1, 0, 0, 1}});
-
-    return vertices;
-  }
-
-  std::vector<uint32_t> create_cuboid_indices() {
-    std::vector<uint32_t> indices;
-    indices.reserve(36); // 6 faces * 6 indices per face
-
-    for (uint32_t face = 0; face < 6; ++face) {
-      const uint32_t base = face * 4;
-      // First triangle
-      indices.push_back(base);
-      indices.push_back(base + 1);
-      indices.push_back(base + 2);
-      // Second triangle
-      indices.push_back(base + 2);
-      indices.push_back(base + 3);
-      indices.push_back(base);
-    }
-
-    return indices;
-  }
-
   void make_meshes(u32 imageCount) {
     meshes.emplace_back(device, create_cuboid_vertices(0.2f, 4.0f, 0.2f), create_cuboid_indices());
     meshes.emplace_back(device, create_cuboid_vertices(0.2f, 2.0f, 0.2f), create_cuboid_indices());
@@ -325,7 +107,7 @@ export class App {
 
     transforms[TX_Stick1] = Transform{
         .translation = {0.0f, 2.0f, 0.0f},      // End of first stick
-        .rotation_speed = {60.0f, 45.0f, 30.0f} // Z-axis rotation
+        .rotation_speed = {59.0f, 45.0f, 29.0f} // Z-axis rotation
     };
 
     transforms[TX_Joint1] = Transform{
@@ -333,8 +115,8 @@ export class App {
     };
 
     transforms[TX_Stick2] = Transform{
-        .translation = {0.0f, 1.0f, 0.0f},      // End of first stick
-        .rotation_speed = {30.0f, 22.5f, 15.0f} // Z-axis rotation
+        .translation = {0.0f, 1.0f, 0.0f},     // End of first stick
+        .rotation_speed = {28.0f, 22.3f, 7.0f} // Z-axis rotation
     };
 
     transforms[TX_Joint2] = Transform{
@@ -343,7 +125,7 @@ export class App {
 
     transforms[TX_Stick3] = Transform{
         .translation = {0.0f, 0.5f, 0.0f},    // Half-length offset
-        .rotation_speed = {0.0f, 0.0f, 30.0f} // Z-axis rotation
+        .rotation_speed = {3.0f, 5.0f, 13.0f} // Z-axis rotation
     };
 
     // Shoulder (root, meshless)
@@ -369,6 +151,21 @@ export class App {
         {.mesh = &meshes[2], .transform = &transforms[TX_Stick3], .parent = joint2});
   }
 
+  std::expected<void, std::string> read_shaders() {
+    auto vertexShaderModule = createShaderModuleFromFile(device.logical(), "shaders/vert.spv");
+    if (!vertexShaderModule) {
+      return std::unexpected(vertexShaderModule.error());
+    }
+    auto fragmentShaderModule = createShaderModuleFromFile(device.logical(), "shaders/frag.spv");
+    if (!fragmentShaderModule) {
+      return std::unexpected(fragmentShaderModule.error());
+    }
+    shaders.emplace_back(std::move(*vertexShaderModule));
+    shaders.emplace_back(std::move(*fragmentShaderModule));
+
+    return {};
+  }
+
   void SetupVulkan() {
     EXPECTED_VOID(instance.create());
     if (!NDEBUG)
@@ -376,6 +173,7 @@ export class App {
     EXPECTED_VOID(device.pickPhysicalDevice());
     EXPECTED_VOID(device.createLogicalDevice());
     EXPECTED_VOID(createDescriptorSetLayout());
+    EXPECTED_VOID(read_shaders());
     transforms.resize(TX_COUNT, Transform{}); // Initialize all transforms
   }
 
@@ -455,7 +253,7 @@ export class App {
         },
         vk::SubpassContents::eInline);
 
-    fd.CommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline);
+    fd.CommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline.pipeline);
     fd.CommandBuffer.setViewport(0,
                                  vk::Viewport{
                                      .x = 0.0f,
@@ -473,7 +271,7 @@ export class App {
     const glm::mat4 projMatrix = camera.GetProjectionMatrix((f32)wd.config.swapchainExtent.width /
                                                             (f32)wd.config.swapchainExtent.height);
     scene.update(wd.FrameIndex, viewMatrix, projMatrix, deltaTime);
-    scene.draw(fd.CommandBuffer, pipelineLayout, wd.FrameIndex);
+    scene.draw(fd.CommandBuffer, graphicsPipeline.pipelineLayout, wd.FrameIndex);
 
     ImGui_ImplVulkan_RenderDrawData(draw_data, *fd.CommandBuffer);
 
@@ -738,7 +536,22 @@ public:
 
     SetupVulkanWindow(wd.Surface, get_window_size(window));
 
-    EXPECTED_VOID(createGraphicsPipeline());
+    EXPECTED_VOID(graphicsPipeline.createPipelineLayout(device.logical(), *descriptorSetLayout));
+    EXPECTED_VOID(
+        graphicsPipeline.createGraphicsPipeline(device.logical(),
+                                                {
+                                                    {
+                                                        .stage = vk::ShaderStageFlagBits::eVertex,
+                                                        .module = shaders[0],
+                                                        .pName = "main",
+                                                    },
+                                                    {
+                                                        .stage = vk::ShaderStageFlagBits::eFragment,
+                                                        .module = shaders[1],
+                                                        .pName = "main",
+                                                    },
+                                                },
+                                                wd.RenderPass));
     make_meshes(wd.Frames.size());
     make_scene();
     EXPECTED_VOID(device.createDescriptorPool(wd.Frames.size() * scene.nodes.size()));
