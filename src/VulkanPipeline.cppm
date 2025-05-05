@@ -7,7 +7,7 @@ export module vulkan_app:VulkanPipeline;
 
 import vulkan_hpp;
 import std;
-import :DDX;
+import :VulkanWindow;
 import :VulkanDevice;
 import :extra;
 
@@ -84,7 +84,9 @@ export struct VulkanPipeline {
 
   std::expected<void, std::string>
   createGraphicsPipeline(const vk::raii::Device &device,
+                         const vk::raii::PipelineCache &pipelineCache,
                          std::vector<vk::PipelineShaderStageCreateInfo> shaderStages,
+                         vk::PipelineInputAssemblyStateCreateInfo inputAssembly,
                          const vk::raii::RenderPass &renderPass) NOEXCEPT {
     vk::VertexInputBindingDescription bindingDescription{
         .binding = 0,
@@ -106,11 +108,11 @@ export struct VulkanPipeline {
         .pVertexAttributeDescriptions = attributes.data(),
     };
 
-    vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
-        .topology = vk::PrimitiveTopology::eTriangleList,
-        .primitiveRestartEnable = false,
-    };
-
+    // vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
+    //     .topology = vk::PrimitiveTopology::eTriangleList,
+    //     .primitiveRestartEnable = false,
+    // };
+    //
     vk::PipelineViewportStateCreateInfo viewportState{
         .viewportCount = 1,
         .scissorCount = 1,
@@ -160,7 +162,7 @@ export struct VulkanPipeline {
         .subpass = 0,
     };
 
-    if (auto expected = device.createGraphicsPipeline(nullptr, pipelineInfo); expected) {
+    if (auto expected = device.createGraphicsPipeline(pipelineCache, pipelineInfo); expected) {
       pipeline = std::move(*expected);
       std::println("Graphics pipeline created successfully!");
       return {};

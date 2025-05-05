@@ -58,7 +58,7 @@ public:
   float Pitch = 0.0f;                   // Vertical rotation (degrees)
   float Zoom = 45.0f;                   // Field of view (degrees)
   float Near = 0.1f;                    // Near clipping plane
-  float Far = 100.0f;                   // Far clipping plane
+  float Far = 1000.0f;                  // Far clipping plane
 
   // === Control Parameters ===
   float MovementSpeed = 100.f;   // Base movement speed
@@ -82,16 +82,13 @@ public:
     );
   }
 
-private:
   void updateVectors() {
-    // Calculate new Front vector
     glm::vec3 front;
     front.x = cos(glm::radians(Yaw)) * cos(glm::radians(Pitch));
     front.y = sin(glm::radians(Pitch));
     front.z = sin(glm::radians(Yaw)) * cos(glm::radians(Pitch));
     Front = glm::normalize(front);
 
-    // Recalculate right and up vectors
     Right = glm::normalize(glm::cross(Front, WorldUp));
     Up = glm::normalize(glm::cross(Right, Front));
   }

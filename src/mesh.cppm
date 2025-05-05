@@ -9,9 +9,10 @@ export module vulkan_app:mesh;
 
 import vulkan_hpp;
 import std;
-import :DDX;
+import :VulkanWindow;
 import :VulkanDevice;
 import :extra;
+import :VulkanPipeline;
 
 export struct Submesh {
   uint32_t indexOffset;
@@ -21,15 +22,6 @@ export struct Submesh {
 
 export class Mesh {
   VulkanDevice &device;
-
-  std::vector<Submesh> submeshes{
-      {.indexOffset = 0,
-       .indexCount = 36,
-       .material =
-           {
-               .baseColorFactor = {1, 0, 0, 1},
-           }},
-  };
 
   std::vector<Vertex> vertices;
   std::vector<uint32_t> indices;
@@ -49,9 +41,16 @@ export class Mesh {
   std::vector<vk::raii::DescriptorSet> descriptorSets;
 
 public:
-  Transform transform;
+  std::vector<Submesh> submeshes{
+      {.indexOffset = 0,
+       .indexCount = 36,
+       .material =
+           {
+               .baseColorFactor = {1, 0, 0, 1},
+           }},
+  };
 
-  Mesh(VulkanDevice &dev, std::vector<Vertex> &&verts, std::vector<u32> indices, Material mat = {})
+  Mesh(VulkanDevice &dev, std::vector<Vertex> &&verts, std::vector<u32> &&indices)
       : device(dev), vertices(std::move(verts)), indices(std::move(indices)) {
     EXPECTED_VOID(createVertexBuffer());
     EXPECTED_VOID(createIndexBuffer());
@@ -174,11 +173,13 @@ public:
   }
 
   void updateMaterialBuffer(uint32_t currentImage, uint32_t submeshIndex) {
-    void *data = device.logical().mapMemory2KHR({
-        .memory = materialUniformBuffersMemory,
-        .offset = (currentImage * submeshes.size() + submeshIndex) * sizeof(Material),
-        .size = sizeof(Material),
-    });
+    auto alignment = device.physical().getProperties().limits.minUniformBufferOffsetAlignment;
+    auto alignedSize = (sizeof(Material) + alignment - 1) & ~(alignment - 1);
+
+    void *data = device.logical().mapMemory2KHR(
+        {.memory = materialUniformBuffersMemory,
+         .offset = currentImage * alignedSize * submeshes.size() + submeshIndex * alignedSize,
+         .size = sizeof(Material)});
     std::memcpy(data, &submeshes[submeshIndex].material, sizeof(Material));
     device.logical().unmapMemory2KHR({.memory = materialUniformBuffersMemory});
   }
@@ -189,20 +190,18 @@ public:
     }
   }
 
-  void bind(vk::raii::CommandBuffer &cmdBuffer, const vk::raii::PipelineLayout &pipelineLayout,
-            u32 currentImage) const {
+  void bind(vk::raii::CommandBuffer &cmdBuffer, VulkanPipeline *pipeline, u32 currentImage) const {
     cmdBuffer.bindVertexBuffers(0, {*vertexBuffer}, {0});
     cmdBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint32);
-    cmdBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0,
+    cmdBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline->pipelineLayout, 0,
                                  *descriptorSets[currentImage], {});
   }
 
   void draw(vk::raii::CommandBuffer &cmdBuffer) const {
-    cmdBuffer.drawIndexed(indices.size(), 1, 0, 0, 0);
+    for (const auto &submesh : submeshes) {
+      cmdBuffer.drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
+    }
   }
-  // void translate(const glm::vec3 &translation) { transform.translation += translation; }
-  // void rotate(const glm::vec3 &rotation) { transform.rotation += rotation; }
-  // void scaleBy(const glm::vec3 &scaling) { transform.scale *= scaling; }
 
   std::expected<void, std::string>
   allocateDescriptorSets(const vk::raii::DescriptorPool &pool,

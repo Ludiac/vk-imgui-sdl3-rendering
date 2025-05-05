@@ -3,7 +3,7 @@ module;
 #include "imgui.h"
 #include <vulkan/vulkan_core.h>
 
-export module vulkan_app:DDX;
+export module vulkan_app:VulkanWindow;
 
 import vulkan_hpp;
 import :VulkanDevice;

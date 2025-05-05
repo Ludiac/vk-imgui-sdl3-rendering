@@ -9,7 +9,7 @@ export module vulkan_app:scene;
 
 import vulkan_hpp;
 import std;
-import :DDX;
+import :VulkanWindow;
 import :VulkanDevice;
 import :extra;
 import :mesh;
@@ -18,17 +18,20 @@ class SceneNode;
 
 struct SceneNodeCreateInfo {
   Mesh *mesh = nullptr;
-  Transform *transform = nullptr; // Pointer to external transform (mesh's or custom)
+  Transform transform; // Pointer to external transform (mesh's or custom)
+  VulkanPipeline *pipeline = nullptr;
   SceneNode *parent = nullptr;
 };
 
 class SceneNode {
 public:
   Mesh *mesh = nullptr;
-  Transform *transform; // Points to external transform (never null)
+  Transform transform;
+  VulkanPipeline *pipeline;
   std::vector<SceneNode *> children;
 
-  explicit SceneNode(const SceneNodeCreateInfo &info) : mesh(info.mesh), transform(info.transform) {
+  explicit SceneNode(const SceneNodeCreateInfo &info)
+      : mesh(info.mesh), transform(info.transform), pipeline(info.pipeline) {
     assert(transform != nullptr && "SceneNode must have a valid transform");
   }
 
@@ -36,10 +39,8 @@ public:
 
   void update(glm::mat4 parentTransform, uint32_t currentImage, const glm::mat4 &view,
               const glm::mat4 &projection, float deltaTime) {
-    // Calculate local transformation matrix
-    glm::mat4 localTransform = transform->matrix(deltaTime);
+    glm::mat4 localTransform = transform.matrix(deltaTime);
 
-    // Combine with parent's world transform
     glm::mat4 worldTransform = parentTransform * localTransform;
 
     if (mesh) {
@@ -53,14 +54,11 @@ public:
     }
   }
 
-  void draw(vk::raii::CommandBuffer &cmd, const vk::raii::PipelineLayout &layout,
-            u32 currentImage) {
+  void draw(vk::raii::CommandBuffer &cmd, u32 currentImage) {
     if (mesh) {
-      mesh->bind(cmd, layout, currentImage);
+      mesh->bind(cmd, pipeline, currentImage);
       mesh->draw(cmd);
     }
-    for (SceneNode *child : children)
-      child->draw(cmd, layout, currentImage);
   }
 
   void createUniformBuffers(u32 imageCount) {
@@ -128,10 +126,22 @@ public:
       root->update(glm::mat4(1.0f), currentImage, view, projection, deltaTime);
   }
 
-  void draw(vk::raii::CommandBuffer &cmdBuffer, const vk::raii::PipelineLayout &layout,
-            u32 currentImage) {
-    for (decltype(auto) root : roots)
-      root->draw(cmdBuffer, layout, currentImage);
+  void draw(vk::raii::CommandBuffer &cmdBuffer, u32 currentImage) {
+    std::sort(nodes.begin(), nodes.end(),
+              [](const auto &a, const auto &b) { return a->pipeline < b->pipeline; });
+    VulkanPipeline *currentPipeline = nullptr;
+
+    for (decltype(auto) node : nodes) {
+      if (!node->mesh)
+        continue; // Skip non-renderables
+
+      if (node->pipeline != currentPipeline) {
+        cmdBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *node->pipeline->pipeline);
+        currentPipeline = node->pipeline;
+      }
+
+      node->draw(cmdBuffer, currentImage);
+    }
   }
 
   void addRoot(SceneNode *node) { roots.push_back(node); }

@@ -14,7 +14,7 @@ export module vulkan_app;
 
 import vulkan_hpp;
 import std;
-import :DDX;
+import :VulkanWindow;
 import :VulkanDevice;
 import :VulkanInstance;
 import :VulkanPipeline;
@@ -44,7 +44,7 @@ void check_vk_result_hpp(vk::Result err) {
 export class App {
   VulkanInstance instance;
   VulkanDevice device{instance};
-  VulkanPipeline graphicsPipeline;
+  std::vector<VulkanPipeline> graphicsPipelines;
 
   std::vector<vk::raii::ShaderModule> shaders;
 
@@ -55,7 +55,7 @@ export class App {
   vk::raii::DescriptorSetLayout descriptorSetLayout{nullptr};
   vk::raii::PipelineCache pipelineCache{nullptr};
 
-  std::vector<Mesh> meshes;          // All actual renderable meshes
+  std::vector<Mesh> meshes;
   std::vector<Transform> transforms; // All transforms (indexed for clarity)
 
   enum Transforms {
@@ -100,55 +100,81 @@ export class App {
     meshes.emplace_back(device, create_cuboid_vertices(0.2f, 1.0f, 0.2f), create_cuboid_indices());
   }
 
-  // In App::make_scene()
+  void make_axes() {
+    constexpr float axisLength = 1000.0f;
+    std::vector<Vertex> axisVertices = {
+        // X-axis (both directions)
+        {{-axisLength, 0.0f, 0.0f}}, // 0 - start
+        {{axisLength, 0.0f, 0.0f}},  // 1 - end
+
+        // Y-axis (both directions)
+        {{0.0f, -axisLength, 0.0f}}, // 2 - start
+        {{0.0f, axisLength, 0.0f}},  // 3 - end
+
+        // Z-axis (both directions)
+        {{0.0f, 0.0f, -axisLength}}, // 4 - start
+        {{0.0f, 0.0f, axisLength}}   // 5 - end
+    };
+
+    std::vector<u32> axisIndices = {
+        0, 1, // X-axis
+        2, 3, // Y-axis
+        4, 5  // Z-axis
+    };
+
+    meshes.emplace_back(device, std::move(axisVertices), std::move(axisIndices));
+    meshes.back().submeshes = {
+        {0, 2, {.baseColorFactor = {1, 0, 0, 1}}}, // X-axis (red)
+        {2, 2, {.baseColorFactor = {0, 1, 0, 1}}}, // Y-axis (green)
+        {4, 2, {.baseColorFactor = {0, 0, 1, 1}}}  // Z-axis (blue)
+    };
+  }
+
   void make_scene() {
-    transforms[TX_Shoulder] =
-        Transform{.translation = {0.0f, 0.0f, 0.0f}, .rotation = {0.0f, 0.0f, 0.0f}};
-
-    transforms[TX_Stick1] = Transform{
-        .translation = {0.0f, 2.0f, 0.0f},      // End of first stick
-        .rotation_speed = {59.0f, 45.0f, 29.0f} // Z-axis rotation
-    };
-
-    transforms[TX_Joint1] = Transform{
-        .translation = {0.0f, 2.0f, 0.0f}, // End of first stick
-    };
-
-    transforms[TX_Stick2] = Transform{
-        .translation = {0.0f, 1.0f, 0.0f},     // End of first stick
-        .rotation_speed = {28.0f, 22.3f, 7.0f} // Z-axis rotation
-    };
-
-    transforms[TX_Joint2] = Transform{
-        .translation = {0.0f, 1.0f, 0.0f}, // Half-length offset
-    };
-
-    transforms[TX_Stick3] = Transform{
-        .translation = {0.0f, 0.5f, 0.0f},    // Half-length offset
-        .rotation_speed = {3.0f, 5.0f, 13.0f} // Z-axis rotation
-    };
+    auto axisNode = scene.createNode({
+        .mesh = &meshes.back(), // Last mesh is the axis
+        .transform = Transform{},
+        .pipeline = &graphicsPipelines[1], // Use line pipeline
+    });
 
     // Shoulder (root, meshless)
-    auto shoulder = scene.createNode({.transform = &transforms[TX_Shoulder]});
+    auto shoulder = scene.createNode({
+        .transform = Transform{.translation = {0.0f, 0.0f, 0.0f}, .rotation = {0.0f, 0.0f, 0.0f}},
+        .pipeline = &graphicsPipelines[0],
+    });
 
     // Stick 1 - upper arm (4 units)
-    auto stick1 = scene.createNode({.mesh = &meshes[0], // First mesh in vector
-                                    .transform = &transforms[TX_Stick1],
+    auto stick1 = scene.createNode({.mesh = &meshes[0],
+                                    .transform = Transform{.translation = {0.0f, 2.0f, 0.0f},
+                                                           .rotation_speed = {59.0f, 45.0f, 29.0f}},
+                                    .pipeline = &graphicsPipelines[0],
                                     .parent = shoulder});
 
     // Joint 1 - controls upper arm rotation
-    auto joint1 = scene.createNode({.transform = &transforms[TX_Joint1], .parent = stick1});
+    auto joint1 = scene.createNode({.transform = Transform{.translation = {0.0f, 2.0f, 0.0f}},
+                                    .pipeline = &graphicsPipelines[0],
+                                    .parent = stick1});
 
     // Stick 2 - forearm (2 units)
-    auto stick2 = scene.createNode(
-        {.mesh = &meshes[1], .transform = &transforms[TX_Stick2], .parent = joint1});
+    auto stick2 = scene.createNode({.mesh = &meshes[1],
+                                    .transform = Transform{.translation = {0.0f, 1.0f, 0.0f},
+                                                           .rotation = {3.0f, 5.0f, 13.0f},
+                                                           .rotation_speed = {0.0f, 0.0f, 0.0f}},
+                                    .pipeline = &graphicsPipelines[0],
+                                    .parent = joint1});
 
     // Joint 2 - elbow
-    auto joint2 = scene.createNode({.transform = &transforms[TX_Joint2], .parent = stick2});
+    auto joint2 = scene.createNode({.transform = Transform{.translation = {0.0f, 1.0f, 0.0f}},
+                                    .pipeline = &graphicsPipelines[0],
+                                    .parent = stick2});
 
     // Stick 3 - hand (cube)
-    auto stick3 = scene.createNode(
-        {.mesh = &meshes[2], .transform = &transforms[TX_Stick3], .parent = joint2});
+    auto stick3 = scene.createNode({.mesh = &meshes[2],
+                                    .transform = Transform{.translation = {0.0f, 0.5f, 0.0f},
+                                                           .rotation = {3.0f, 5.0f, 13.0f},
+                                                           .rotation_speed = {0.0f, 0.0f, 0.0f}},
+                                    .pipeline = &graphicsPipelines[0],
+                                    .parent = joint2});
   }
 
   std::expected<void, std::string> read_shaders() {
@@ -253,7 +279,6 @@ export class App {
         },
         vk::SubpassContents::eInline);
 
-    fd.CommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline.pipeline);
     fd.CommandBuffer.setViewport(0,
                                  vk::Viewport{
                                      .x = 0.0f,
@@ -270,8 +295,9 @@ export class App {
     const glm::mat4 viewMatrix = camera.GetViewMatrix();
     const glm::mat4 projMatrix = camera.GetProjectionMatrix((f32)wd.config.swapchainExtent.width /
                                                             (f32)wd.config.swapchainExtent.height);
+
     scene.update(wd.FrameIndex, viewMatrix, projMatrix, deltaTime);
-    scene.draw(fd.CommandBuffer, graphicsPipeline.pipelineLayout, wd.FrameIndex);
+    scene.draw(fd.CommandBuffer, wd.FrameIndex);
 
     ImGui_ImplVulkan_RenderDrawData(draw_data, *fd.CommandBuffer);
 
@@ -350,7 +376,7 @@ export class App {
     for (size_t i = 0; i < meshes.size(); ++i) {
       // Unique header ID using index
       if (ImGui::CollapsingHeader(("Mesh " + std::to_string(i)).c_str())) {
-        auto &transform = meshes[i].transform;
+        auto &transform = scene.nodes[i]->transform;
 
         // Add unique suffix to all widget labels using "##"
         std::string meshId = "##Mesh" + std::to_string(i);
@@ -509,6 +535,9 @@ export class App {
       }
 
       ImGui::Render();
+
+      camera.updateVectors();
+
       ImDrawData *draw_data = ImGui::GetDrawData();
       FrameRender(draw_data, deltaTime);
       FramePresent(wd);
@@ -520,6 +549,51 @@ export class App {
       //   std::this_thread::sleep_for(std::chrono::duration<float>(sleepTime));
       // }
     }
+  }
+
+  void create_pipelines() {
+    EXPECTED_VOID(
+        graphicsPipelines[0].createPipelineLayout(device.logical(), *descriptorSetLayout));
+    EXPECTED_VOID(graphicsPipelines[0].createGraphicsPipeline(
+        device.logical(), pipelineCache,
+        {
+            {
+                .stage = vk::ShaderStageFlagBits::eVertex,
+                .module = shaders[0],
+                .pName = "main",
+            },
+            {
+                .stage = vk::ShaderStageFlagBits::eFragment,
+                .module = shaders[1],
+                .pName = "main",
+            },
+        },
+        {
+            .topology = vk::PrimitiveTopology::eTriangleList,
+            .primitiveRestartEnable = false,
+        },
+        wd.RenderPass));
+    EXPECTED_VOID(
+        graphicsPipelines[1].createPipelineLayout(device.logical(), *descriptorSetLayout));
+    EXPECTED_VOID(graphicsPipelines[1].createGraphicsPipeline(
+        device.logical(), pipelineCache,
+        {
+            {
+                .stage = vk::ShaderStageFlagBits::eVertex,
+                .module = shaders[0],
+                .pName = "main",
+            },
+            {
+                .stage = vk::ShaderStageFlagBits::eFragment,
+                .module = shaders[1],
+                .pName = "main",
+            },
+        },
+        {
+            .topology = vk::PrimitiveTopology::eLineList,
+            .primitiveRestartEnable = false,
+        },
+        wd.RenderPass));
   }
 
 public:
@@ -534,25 +608,11 @@ public:
     }
     wd.Surface = {instance, surface_raw_handle};
 
+    graphicsPipelines.resize(2);
     SetupVulkanWindow(wd.Surface, get_window_size(window));
-
-    EXPECTED_VOID(graphicsPipeline.createPipelineLayout(device.logical(), *descriptorSetLayout));
-    EXPECTED_VOID(
-        graphicsPipeline.createGraphicsPipeline(device.logical(),
-                                                {
-                                                    {
-                                                        .stage = vk::ShaderStageFlagBits::eVertex,
-                                                        .module = shaders[0],
-                                                        .pName = "main",
-                                                    },
-                                                    {
-                                                        .stage = vk::ShaderStageFlagBits::eFragment,
-                                                        .module = shaders[1],
-                                                        .pName = "main",
-                                                    },
-                                                },
-                                                wd.RenderPass));
+    create_pipelines();
     make_meshes(wd.Frames.size());
+    make_axes();
     make_scene();
     EXPECTED_VOID(device.createDescriptorPool(wd.Frames.size() * scene.nodes.size()));
     scene.createUniformBuffers(wd.Frames.size());
