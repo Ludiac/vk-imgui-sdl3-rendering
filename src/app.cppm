@@ -95,12 +95,25 @@ export class App {
   }
 
   void make_meshes(u32 imageCount) {
-    meshes.emplace_back(device, create_cuboid_vertices(0.2f, 4.0f, 0.2f), create_cuboid_indices());
-    meshes.emplace_back(device, create_cuboid_vertices(0.2f, 2.0f, 0.2f), create_cuboid_indices());
-    meshes.emplace_back(device, create_cuboid_vertices(0.2f, 1.0f, 0.2f), create_cuboid_indices());
+    std::vector<Submesh> default_submesh{{
+        .indexOffset = 0,
+        .indexCount = 36,
+        .material =
+            {
+                .baseColorFactor = {1, 0, 0, 1},
+            },
+    }};
+    auto submesh2 = default_submesh;
+    auto submesh3 = default_submesh;
+    meshes.emplace_back(device, create_cuboid_vertices(0.8f, 4.0f, 0.2f), create_cuboid_indices(),
+                        std::move(default_submesh), imageCount);
+    meshes.emplace_back(device, create_cuboid_vertices(0.4f, 2.0f, 0.2f), create_cuboid_indices(),
+                        std::move(submesh2), imageCount);
+    meshes.emplace_back(device, create_cuboid_vertices(0.2f, 1.0f, 0.2f), create_cuboid_indices(),
+                        std::move(submesh3), imageCount);
   }
 
-  void make_axes() {
+  void make_axes(u32 imageCount) {
     constexpr float axisLength = 1000.0f;
     std::vector<Vertex> axisVertices = {
         // X-axis (both directions)
@@ -122,12 +135,13 @@ export class App {
         4, 5  // Z-axis
     };
 
-    meshes.emplace_back(device, std::move(axisVertices), std::move(axisIndices));
-    meshes.back().submeshes = {
+    std::vector<Submesh> submesh = {
         {0, 2, {.baseColorFactor = {1, 0, 0, 1}}}, // X-axis (red)
         {2, 2, {.baseColorFactor = {0, 1, 0, 1}}}, // Y-axis (green)
         {4, 2, {.baseColorFactor = {0, 0, 1, 1}}}  // Z-axis (blue)
     };
+    meshes.emplace_back(device, std::move(axisVertices), std::move(axisIndices), std::move(submesh),
+                        imageCount);
   }
 
   void make_scene() {
@@ -520,7 +534,7 @@ export class App {
         wd.SemaphoreIndex = 0;
         swapChainRebuild = false;
         rebuild_counter++;
-        scene.createUniformBuffers(wd.Frames.size());
+        scene.recreateUniformBuffers(wd.Frames.size());
         scene.updateDescriptorSets(wd.FrameIndex);
       }
 
@@ -608,14 +622,13 @@ public:
     }
     wd.Surface = {instance, surface_raw_handle};
 
-    graphicsPipelines.resize(2);
     SetupVulkanWindow(wd.Surface, get_window_size(window));
+    graphicsPipelines.resize(2);
     create_pipelines();
     make_meshes(wd.Frames.size());
-    make_axes();
+    make_axes(wd.Frames.size());
     make_scene();
     EXPECTED_VOID(device.createDescriptorPool(wd.Frames.size() * scene.nodes.size()));
-    scene.createUniformBuffers(wd.Frames.size());
     scene.allocateDescriptorSets(device.descriptorPool, descriptorSetLayout, wd.Frames.size());
     for (u32 p = 0; p < wd.Frames.size(); ++p)
       scene.updateDescriptorSets(p);

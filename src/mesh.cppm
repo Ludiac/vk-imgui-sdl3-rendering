@@ -40,21 +40,7 @@ export class Mesh {
 
   std::vector<vk::raii::DescriptorSet> descriptorSets;
 
-public:
-  std::vector<Submesh> submeshes{
-      {.indexOffset = 0,
-       .indexCount = 36,
-       .material =
-           {
-               .baseColorFactor = {1, 0, 0, 1},
-           }},
-  };
-
-  Mesh(VulkanDevice &dev, std::vector<Vertex> &&verts, std::vector<u32> &&indices)
-      : device(dev), vertices(std::move(verts)), indices(std::move(indices)) {
-    EXPECTED_VOID(createVertexBuffer());
-    EXPECTED_VOID(createIndexBuffer());
-  }
+  std::vector<Submesh> submeshes;
 
   std::expected<void, std::string> createVertexBuffer() NOEXCEPT {
     const auto bufferSize = sizeof(Vertex) * vertices.size();
@@ -133,6 +119,9 @@ public:
   }
 
   std::expected<void, std::string> createMaterialUniformBuffers(uint32_t imageCount) NOEXCEPT {
+    if (submeshes.empty())
+      return {};
+
     auto alignment = device.physical().getProperties().limits.minUniformBufferOffsetAlignment;
     auto alignedSize = (sizeof(Material) + alignment - 1) & ~(alignment - 1);
     auto bufferSize = alignedSize * imageCount * submeshes.size();
@@ -152,8 +141,73 @@ public:
     materialUniformBuffersMemory = std::move(resources->memory);
     device.logical().bindBufferMemory2(bindInfo);
 
+    for (uint32_t i = 0; i < imageCount; ++i) {
+      updateMaterialUniformBuffers(i);
+    }
     // std::println("material uniformBuffers created successfully!");
     return {};
+  }
+
+  void updateMaterialUniformBuffer(uint32_t currentImage, uint32_t submeshIndex) {
+    auto alignment = device.physical().getProperties().limits.minUniformBufferOffsetAlignment;
+    auto alignedSize = (sizeof(Material) + alignment - 1) & ~(alignment - 1);
+
+    void *data = device.logical().mapMemory2KHR(
+        {.memory = materialUniformBuffersMemory,
+         .offset = currentImage * alignedSize * submeshes.size() + submeshIndex * alignedSize,
+         .size = sizeof(Material)});
+    std::memcpy(data, &submeshes[submeshIndex].material, sizeof(Material));
+    device.logical().unmapMemory2KHR({.memory = materialUniformBuffersMemory});
+  }
+
+  void updateMaterialUniformBuffers(uint32_t currentImage) {
+    for (u32 i = 0; i < submeshes.size(); ++i) {
+      updateMaterialUniformBuffer(currentImage, i);
+    }
+  }
+
+public:
+  Mesh(VulkanDevice &dev, std::vector<Vertex> &&verts, std::vector<u32> &&indices,
+       std::vector<Submesh> &&submeshes, u32 imageCount)
+      : device(dev), vertices(std::move(verts)), indices(std::move(indices)),
+        submeshes(std::move(submeshes)) {
+    EXPECTED_VOID(createVertexBuffer());
+    EXPECTED_VOID(createIndexBuffer());
+    EXPECTED_VOID(createUniformBuffers(imageCount));
+    EXPECTED_VOID(createMaterialUniformBuffers(imageCount));
+  }
+
+  void bind(vk::raii::CommandBuffer &cmdBuffer, VulkanPipeline *pipeline, u32 currentImage) const {
+    cmdBuffer.bindVertexBuffers(0, {*vertexBuffer}, {0});
+    cmdBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint32);
+    cmdBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline->pipelineLayout, 0,
+                                 *descriptorSets[currentImage], {});
+  }
+
+  void draw(vk::raii::CommandBuffer &cmdBuffer) const {
+    for (const auto &submesh : submeshes) {
+      cmdBuffer.drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
+    }
+  }
+
+  std::expected<void, std::string> recreateMaterialUniformBuffers(uint32_t imageCount) NOEXCEPT {
+    materialUniformBuffers = nullptr;
+    materialUniformBuffersMemory = nullptr;
+
+    createMaterialUniformBuffers(imageCount);
+
+    for (uint32_t i = 0; i < imageCount; ++i) {
+      updateMaterialUniformBuffers(i);
+    }
+
+    return {};
+  }
+
+  std::expected<void, std::string> recreateUniformBuffers(uint32_t imageCount) NOEXCEPT {
+    uniformBuffers = nullptr;
+    uniformBuffersMemory = nullptr;
+
+    return createUniformBuffers(imageCount);
   }
 
   void updateUniformBuffer(uint32_t currentImage, const glm::mat4 &model, const glm::mat4 &view,
@@ -172,37 +226,6 @@ public:
     device.logical().unmapMemory2KHR({.memory = uniformBuffersMemory});
   }
 
-  void updateMaterialBuffer(uint32_t currentImage, uint32_t submeshIndex) {
-    auto alignment = device.physical().getProperties().limits.minUniformBufferOffsetAlignment;
-    auto alignedSize = (sizeof(Material) + alignment - 1) & ~(alignment - 1);
-
-    void *data = device.logical().mapMemory2KHR(
-        {.memory = materialUniformBuffersMemory,
-         .offset = currentImage * alignedSize * submeshes.size() + submeshIndex * alignedSize,
-         .size = sizeof(Material)});
-    std::memcpy(data, &submeshes[submeshIndex].material, sizeof(Material));
-    device.logical().unmapMemory2KHR({.memory = materialUniformBuffersMemory});
-  }
-
-  void updateMaterialBuffers(uint32_t currentImage) {
-    for (u32 i = 0; i < submeshes.size(); ++i) {
-      updateMaterialBuffer(currentImage, i);
-    }
-  }
-
-  void bind(vk::raii::CommandBuffer &cmdBuffer, VulkanPipeline *pipeline, u32 currentImage) const {
-    cmdBuffer.bindVertexBuffers(0, {*vertexBuffer}, {0});
-    cmdBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint32);
-    cmdBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline->pipelineLayout, 0,
-                                 *descriptorSets[currentImage], {});
-  }
-
-  void draw(vk::raii::CommandBuffer &cmdBuffer) const {
-    for (const auto &submesh : submeshes) {
-      cmdBuffer.drawIndexed(submesh.indexCount, 1, submesh.indexOffset, 0, 0);
-    }
-  }
-
   std::expected<void, std::string>
   allocateDescriptorSets(const vk::raii::DescriptorPool &pool,
                          const vk::raii::DescriptorSetLayout &layout, u32 imageCount) {
@@ -216,6 +239,11 @@ public:
                              vk::to_string(expected.error()));
     }
     return {};
+  }
+
+  void setSubmeshes(std::vector<Submesh> newSubmeshes, u32 imageCount) {
+    submeshes = std::move(newSubmeshes);
+    recreateMaterialUniformBuffers(imageCount);
   }
 
   void updateDescriptorSet(uint32_t currentImage) {

@@ -45,7 +45,6 @@ public:
 
     if (mesh) {
       mesh->updateUniformBuffer(currentImage, worldTransform, view, projection);
-      mesh->updateMaterialBuffers(currentImage);
       mesh->updateDescriptorSet(currentImage);
     }
 
@@ -61,14 +60,14 @@ public:
     }
   }
 
-  void createUniformBuffers(u32 imageCount) {
+  void recreateUniformBuffers(u32 imageCount) {
     if (mesh) {
-      EXPECTED_VOID(mesh->createUniformBuffers(imageCount));
-      EXPECTED_VOID(mesh->createMaterialUniformBuffers(imageCount));
+      EXPECTED_VOID(mesh->recreateUniformBuffers(imageCount));
+      EXPECTED_VOID(mesh->recreateMaterialUniformBuffers(imageCount));
     }
 
     for (SceneNode *child : children)
-      child->createUniformBuffers(imageCount);
+      child->recreateUniformBuffers(imageCount);
   }
 
   void allocateDescriptorSets(const vk::raii::DescriptorPool &pool,
@@ -104,9 +103,9 @@ public:
     return ptr;
   }
 
-  void createUniformBuffers(uint32_t imageCount) {
+  void recreateUniformBuffers(uint32_t imageCount) {
     for (auto &node : nodes)
-      node->createUniformBuffers(imageCount);
+      node->recreateUniformBuffers(imageCount);
   }
 
   void allocateDescriptorSets(const vk::raii::DescriptorPool &pool,
