@@ -1,11 +1,12 @@
 module;
 
-#include "macros.hpp"
-#include "primitive_types.hpp"
+// #include "macros.hpp"
+// #include "primitive_types.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include <glm/gtx/quaternion.hpp>
+#include <glm/gtx/euler_angles.hpp>
+#include <glm/gtx/matrix_decompose.hpp> // For glm::decompose
 
 export module vulkan_app:Types;
 
@@ -26,39 +27,94 @@ export struct UniformBufferObject {
 };
 
 export struct Transform {
-  glm::vec3 translation = glm::vec3(0.0f);
-  glm::vec3 scale = glm::vec3(1.0f);
-  glm::vec3 rotation = glm::vec3(0.0f);
-  glm::vec3 rotation_speed = glm::vec3(0.0f);
+  glm::vec3 translation{0.0f};
+  glm::vec3 scale{1.0f};
+  glm::quat rotation{glm::identity<glm::quat>()}; // Store rotation as a quaternion
 
-  [[nodiscard]] glm::mat4 matrix(float delta_time = 0.0f) {
-    rotation += rotation_speed * delta_time;
+  // Optional: For continuous rotation, applied in update()
+  glm::vec3 rotation_speed_euler_dps{0.0f}; // Euler angles in degrees per second for rotation speed
 
-    glm::mat4 transform = glm::mat4(1.0f);
-    transform = glm::scale(transform, scale);
-    transform = glm::rotate(transform, glm::radians(rotation.x), {1, 0, 0});
-    transform = glm::rotate(transform, glm::radians(rotation.y), {0, 1, 0});
-    transform = glm::rotate(transform, glm::radians(rotation.z), {0, 0, 1});
-    transform = glm::translate(transform, translation);
+  Transform() = default;
 
-    return transform;
+  // Updates transform based on time (e.g., for rotation_speed)
+  void update(float delta_time) {
+    if (glm::length(rotation_speed_euler_dps) > 0.0f) {
+      // Convert degrees per second to radians per delta_time
+      glm::vec3 angular_change_rad = glm::radians(rotation_speed_euler_dps) * delta_time;
+
+      // Create a delta quaternion from Euler angles
+      // Order of application for Euler to quaternion can matter (e.g., ZYX, XYZ)
+      // Common is ZYX:
+      glm::quat delta_rotation =
+          glm::quat(glm::vec3(angular_change_rad.x, angular_change_rad.y, angular_change_rad.z));
+
+      rotation =
+          delta_rotation * rotation;       // Apply delta rotation (pre-multiply for local rotation)
+      rotation = glm::normalize(rotation); // Normalize quaternion to prevent drift
+    }
+  }
+
+  // Composes and returns the transformation matrix
+  [[nodiscard]] glm::mat4 getMatrix() const {
+    glm::mat4 trans_matrix = glm::translate(glm::mat4(1.0f), translation);
+    glm::mat4 rot_matrix = glm::mat4_cast(rotation);
+    glm::mat4 scale_matrix = glm::scale(glm::mat4(1.0f), scale);
+
+    // Common order: Translate * Rotate * Scale (TRS)
+    // This means scale is applied first to local coordinates, then rotation, then translation.
+    return trans_matrix * rot_matrix * scale_matrix;
+  }
+
+  // Optional: If you need to set Euler angles and convert to quaternion
+  void setRotationEuler(const glm::vec3 &euler_angles_degrees) {
+    rotation = glm::quat(glm::radians(euler_angles_degrees));
+    rotation = glm::normalize(rotation);
+  }
+
+  // Optional: If you need to get Euler angles from quaternion (for display/debug)
+  [[nodiscard]] glm::vec3 getRotationEulerDegrees() const {
+    return glm::degrees(glm::eulerAngles(rotation));
   }
 };
 
+export [[nodiscard]] Transform decomposeFromMatrix(const glm::mat4 &matrix) {
+  Transform t;
+  glm::vec3 skew;        // Not typically used from GLTF but glm::decompose provides it
+  glm::vec4 perspective; // Not typically used for TRS but glm::decompose provides it
+
+  if (glm::decompose(matrix, t.scale, t.rotation, t.translation, skew, perspective)) {
+    // t.rotation is already a quaternion, directly usable.
+    // t.translation and t.scale are also directly usable.
+    // rotation_speed_euler_dps remains at its default (0,0,0)
+  } else {
+    // Decomposition failed (e.g., matrix was degenerate or non-invertible).
+    // Return a default (identity) transform or handle error as appropriate.
+    std::println("Warning: Matrix decomposition failed in Transform::decomposeFromMatrix. "
+                 "Returning default transform.");
+    return Transform{}; // Default constructor gives identity-like transform
+  }
+  return t;
+}
+
 export struct Material {
-  glm::vec4 baseColorFactor{1.0f}; // RGBA (sRGB color)
-  // No textures/metallic/roughness yet
+  glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+  float metallicFactor{1.0f};
+  float roughnessFactor{1.0f};
+  float occlusionStrength{1.0f};
+  glm::vec3 emissiveFactor{0.0f};
+  float normalScale{1.0f};
+  float heightScale{0.0f};
 };
 
 export class Camera {
 public:
   // === Camera Configuration ===
-  glm::vec3 Position{0.0f, 0.0f, 3.0f}; // World position
-  float Yaw = -90.0f;                   // Horizontal rotation (degrees)
-  float Pitch = 0.0f;                   // Vertical rotation (degrees)
-  float Zoom = 45.0f;                   // Field of view (degrees)
-  float Near = 0.1f;                    // Near clipping plane
-  float Far = 1000.0f;                  // Far clipping plane
+  glm::vec3 Position{-10.0f, -10.0f, 60.0f}; // World position
+  float Yaw = -75.0f;                        // Horizontal rotation (degrees)
+  float Pitch = 10.0f;                       // Vertical rotation (degrees)
+  float Zoom = 45.0f;                        // Field of view (degrees)
+  float Near = 0.1f;                         // Near clipping plane
+  float Far = 10000.0f;                      // Far clipping plane
 
   // === Control Parameters ===
   float MovementSpeed = 100.f;   // Base movement speed

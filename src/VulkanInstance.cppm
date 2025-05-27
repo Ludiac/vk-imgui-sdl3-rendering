@@ -52,7 +52,7 @@ public:
   operator vk::raii::Instance &() { return instance; }
   operator const vk::raii::Instance &() const { return instance; }
 
-  std::expected<void, std::string> setupDebugMessenger() {
+  [[nodiscard]] std::expected<void, std::string> setupDebugMessenger() {
     if (auto expected = instance.createDebugUtilsMessengerEXT({
             .messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
                                vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
@@ -72,7 +72,7 @@ public:
     return {};
   }
 
-  std::expected<void, std::string> create() {
+  [[nodiscard]] std::expected<void, std::string> create() {
     vk::raii::Context context;
     if constexpr (!NDEBUG) {
       if (!checkValidationLayerSupport(context)) {

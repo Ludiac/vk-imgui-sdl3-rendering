@@ -5,7 +5,7 @@ int main() {
   SDL.init();
   {
     App app;
-    app.app_run(SDL.window);
+    app.run(SDL.window);
   }
   SDL.terminate();
   return 0;

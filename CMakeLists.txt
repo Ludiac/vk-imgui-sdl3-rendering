@@ -21,6 +21,18 @@ CPMAddPackage(
   DOWNLOAD_ONLY YES
 )
 
+CPMAddPackage(
+    NAME tinygltf
+    GITHUB_REPOSITORY syoyo/tinygltf
+    VERSION 2.9.6
+)
+
+CPMAddPackage(
+    NAME stb
+    GITHUB_REPOSITORY nothings/stb
+    GIT_TAG 5c205738c191bcb0abc65c4febfa9bd25ff35234
+)
+
 add_library(AppModule)
 target_compile_features(AppModule PRIVATE cxx_std_23)
 target_compile_definitions(AppModule PRIVATE
@@ -44,13 +56,20 @@ target_sources(AppModule
         src/VulkanDevice.cppm
         src/VulkanInstance.cppm
         src/VulkanPipeline.cppm
+        src/ModelLoader.cppm
         src/types.cppm
         src/mesh.cppm
         src/scene.cppm
+        src/SceneBuilder.cppm
+        src/texture.cppm
+        src/TextureStore.cppm
+        src/imgui.cppm
+        src/Logger.cppm
 )
 
 target_sources(AppModule
     PRIVATE
+        src/tinygltf_impl.cpp
         ${imgui_SOURCE_DIR}/imgui.cpp
         ${imgui_SOURCE_DIR}/imgui_demo.cpp
         ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -63,12 +82,14 @@ target_sources(AppModule
 target_include_directories(AppModule PRIVATE 
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
+  ${tinygltf_SOURCE_DIR}  
   ${SDL3_INCLUDE_DIRS} 
 )
 
 target_link_libraries(AppModule PRIVATE
     SDL3::SDL3
     Vulkan::Vulkan
+    tinygltf
 )
 
 add_executable(${PROJECT_NAME}
@@ -92,11 +113,13 @@ add_custom_command(
                    -profile glsl_460
                    -entry main
                    -stage vertex
+# -capability spvSparseResidency
                    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vert.slang
     COMMAND slangc -o ${FRAG_SPV}
                    -profile glsl_460
                    -entry main
                    -stage fragment
+-capability spvSparseResidency
                    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.slang
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vert.slang
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.slang
