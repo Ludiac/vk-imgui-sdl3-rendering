@@ -3,3 +3,5 @@
 // #define TINYGLTF_NO_STB_IMAGE    // If you handle image loading separately
 // #define TINYGLTF_NO_EXTERNAL_IMAGE // If you don't want tinygltf to load external images
 // #include "tiny_gltf.h"
+
+#define VMA_IMPLEMENTATION

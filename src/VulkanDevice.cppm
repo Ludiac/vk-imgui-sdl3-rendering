@@ -3,11 +3,13 @@ module;
 #include "imgui_impl_vulkan.h"
 #include "macros.hpp"
 #include "primitive_types.hpp"
+#include "vk_mem_alloc.hpp"
 
 export module vulkan_app:VulkanDevice;
 
 import vulkan_hpp;
 import std;
+import :VMA;
 
 export struct BufferResources {
   vk::raii::Buffer buffer{nullptr};
@@ -19,6 +21,7 @@ private:
   vk::raii::PhysicalDevice physicalDevice{nullptr};
   vk::raii::Device device{nullptr};
   const vk::raii::Instance &instance;
+  vma::Allocator VmaAllocator;
 
 public:
   u32 queueFamily = (u32)-1;
@@ -117,9 +120,16 @@ public:
     }
     if (auto expected = device.getQueue(queueFamily, 0); expected) {
       queue = std::move(*expected);
-      return {};
     } else {
       return std::unexpected(std::format("error with queue {}", vk::to_string(expected.error())));
+    }
+
+    if (auto expected = createVmaAllocator(instance, physicalDevice, device); expected) {
+      VmaAllocator = std::move(*expected);
+      return {};
+    } else {
+      return std::unexpected(
+          std::format("Failed to create Vma allocator: {}", vk::to_string(expected.error())));
     }
   }
 

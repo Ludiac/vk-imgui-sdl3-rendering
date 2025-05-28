@@ -10,27 +10,46 @@ find_package(Vulkan REQUIRED)
 
 set(CPM_SOURCE_CACHE "${CMAKE_CURRENT_SOURCE_DIR}/.cpm_cache")
 
-file(DOWNLOAD https://github.com/cpm-cmake/CPM.cmake/releases/latest/download/CPM.cmake
-     ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
+# Download CPM.cmake if it's not already present
+if(NOT EXISTS "${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake")
+    file(DOWNLOAD https://github.com/cpm-cmake/CPM.cmake/releases/latest/download/CPM.cmake
+         ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
+endif()
 include(${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
 
 CPMAddPackage(
   NAME imgui
   GITHUB_REPOSITORY ocornut/imgui
-  GIT_TAG v1.91.8
-  DOWNLOAD_ONLY YES
+  GIT_TAG v1.91.8 # Consider using the latest release or a specific commit
+  DOWNLOAD_ONLY YES # imgui is added as source files directly
 )
 
 CPMAddPackage(
     NAME tinygltf
     GITHUB_REPOSITORY syoyo/tinygltf
-    VERSION 2.9.6
+    VERSION 2.9.6 # Consider using the latest release or a specific commit
 )
 
 CPMAddPackage(
     NAME stb
     GITHUB_REPOSITORY nothings/stb
-    GIT_TAG 5c205738c191bcb0abc65c4febfa9bd25ff35234
+    GIT_TAG 5c205738c191bcb0abc65c4febfa9bd25ff35234 # This is a specific commit for stb_image.h etc.
+    # For header-only libraries like stb, DOWNLOAD_ONLY might be an option
+    # if you manually manage include directories. However, if it has a CMakeLists.txt
+    # that defines a target, it's better to let CPM handle it.
+    # Given stb is typically used as individual headers, often DOWNLOAD_ONLY is fine
+    # if you then add stb_SOURCE_DIR to include_directories.
+    # For simplicity if it doesn't have a good CMake target, DOWNLOAD_ONLY YES
+    # and then target_include_directories(AppModule PRIVATE ${stb_SOURCE_DIR})
+    # Let's assume for now it's fine as is, or it provides a target.
+)
+
+# Add VulkanMemoryAllocator-Hpp
+CPMAddPackage(
+  NAME VulkanMemoryAllocatorHpp # Name for CPM to track the package
+  GITHUB_REPOSITORY YaaZ/VulkanMemoryAllocator-Hpp
+  GIT_TAG v3.2.1 # Use a specific version tag, v3.0.1 is a stable release
+  # This package provides an interface library target 'VulkanMemoryAllocator-hpp'
 )
 
 add_library(AppModule)
@@ -39,8 +58,10 @@ target_compile_definitions(AppModule PRIVATE
     VULKAN_HPP_NO_SMART_HANDLE
     VULKAN_HPP_NO_EXCEPTIONS
     VULKAN_HPP_NO_CONSTRUCTORS
+    # VULKAN_HPP_ENABLE_STD_MODULE
     VK_USE_PLATFORM_WAYLAND_KHR
     SDL_MAIN_HANDLED  # Prevent SDL from overriding main()
+    # VMA_ENABLE_STD_MODULE
     # APP_USE_UNLIMITED_FRAME_RATE
 )
 
@@ -58,6 +79,7 @@ target_sources(AppModule
         src/VulkanPipeline.cppm
         src/ModelLoader.cppm
         src/types.cppm
+        src/memory_types.cppm
         src/mesh.cppm
         src/scene.cppm
         src/SceneBuilder.cppm
@@ -69,7 +91,7 @@ target_sources(AppModule
 
 target_sources(AppModule
     PRIVATE
-        src/tinygltf_impl.cpp
+        src/implementations.cpp
         ${imgui_SOURCE_DIR}/imgui.cpp
         ${imgui_SOURCE_DIR}/imgui_demo.cpp
         ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -79,17 +101,23 @@ target_sources(AppModule
         ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp
 )
 
-target_include_directories(AppModule PRIVATE 
+target_include_directories(AppModule PRIVATE
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
-  ${tinygltf_SOURCE_DIR}  
-  ${SDL3_INCLUDE_DIRS} 
+  ${tinygltf_SOURCE_DIR}
+  ${SDL3_INCLUDE_DIRS}
+  # VulkanMemoryAllocator-hpp is an interface library, so its include directories
+  # will be propagated automatically when linking.
+  # If VulkanMemoryAllocatorHpp_SOURCE_DIR was needed (e.g. for DOWNLOAD_ONLY):
+  ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/VulkanMemoryAllocator/include
 )
 
 target_link_libraries(AppModule PRIVATE
     SDL3::SDL3
     Vulkan::Vulkan
     tinygltf
+    # GPUOpen::VulkanMemoryAllocator
+    VulkanMemoryAllocator-Hpp::VulkanMemoryAllocator-Hpp
 )
 
 add_executable(${PROJECT_NAME}
@@ -119,7 +147,7 @@ add_custom_command(
                    -profile glsl_460
                    -entry main
                    -stage fragment
--capability spvSparseResidency
+# -capability spvSparseResidency # Note: This was spvSparseResidency, ensure it's correct for frag if needed
                    ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.slang
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vert.slang
             ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.slang

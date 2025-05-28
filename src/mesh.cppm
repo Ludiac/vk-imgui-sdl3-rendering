@@ -20,17 +20,24 @@ public:
 private:
   VulkanDevice &device;
   u32 imageCount_member;
+
   std::vector<Vertex> vertices_data;
   std::vector<uint32_t> indices_data;
+
   vk::raii::Buffer vertexBuffer{nullptr};
   vk::raii::DeviceMemory vertexBufferMemory{nullptr};
+
   vk::raii::Buffer indexBuffer{nullptr};
   vk::raii::DeviceMemory indexBufferMemory{nullptr};
+
   vk::raii::Buffer mvpUniformBuffers{nullptr};
   vk::raii::DeviceMemory mvpUniformBuffersMemory{nullptr};
+
   vk::raii::Buffer materialUniformBuffer{nullptr};
   vk::raii::DeviceMemory materialUniformBufferMemory{nullptr};
+
   std::vector<vk::raii::DescriptorSet> descriptorSets;
+
   [[nodiscard]] std::expected<void, std::string> createVertexBuffer() NOEXCEPT {
     if (vertices_data.empty()) {
       vertexBuffer = nullptr;

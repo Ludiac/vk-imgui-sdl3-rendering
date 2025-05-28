@@ -29,12 +29,6 @@ import :SceneBuilder; // Not used in this hardcoded example, but for future
 import :imgui;        // For ImGui helper functions
 import :Logger;       // For ImGui helper functions
 
-#define LOG_SCOPE Logger::LogScope log_scope_object(__func__, __FILE__, __LINE__)
-#define LOG_MSG(message) Logger::Log(message, "DEBUG")
-#define LOG_INFO(message) Logger::Log(message, "INFO")
-#define LOG_WARN(message) Logger::Log(message, "WARN")
-#define LOG_ERROR(message) Logger::Log(message, "ERROR")
-
 namespace {                             // Anonymous namespace for internal linkage
 constexpr uint32_t MIN_IMAGE_COUNT = 2; // Renamed from minImageCount to avoid conflict
 
@@ -115,7 +109,7 @@ export class App {
 public:
   // Create the single combined descriptor set layout for meshes
   std::expected<void, std::string> createCombinedMeshDescriptorSetLayout() NOEXCEPT {
-    LOG_SCOPE;
+
     std::vector<vk::DescriptorSetLayoutBinding> meshDataBindings = {
         {// Binding 0: MVP Uniform Buffer Object (Vertex Shader)
          .binding = 0,
@@ -140,46 +134,40 @@ public:
                                                      static_cast<uint32_t>(meshDataBindings.size()),
                                                  .pBindings = meshDataBindings.data()};
 
-    LOG_MSG("Attempting to create combined mesh descriptor set layout.");
     auto layoutResult = device.logical().createDescriptorSetLayout(layoutInfo);
     if (!layoutResult) {
       std::string errorMsg = "Failed to create combined mesh descriptor set layout: " +
                              vk::to_string(layoutResult.error());
-      LOG_ERROR(errorMsg);
+
       return std::unexpected(errorMsg);
     }
     combinedMeshLayout = std::move(layoutResult.value());
-    LOG_INFO("Successfully created combined mesh descriptor set layout.");
+
     return {};
   }
 
   void createPipelines() { // Simplified pipeline creation
-    LOG_SCOPE;
+
     if (graphicsPipelines.empty()) {
-      LOG_MSG("Resizing graphicsPipelines to 1.");
+
       graphicsPipelines.resize(2); // For now, one main pipeline
     }
     VulkanPipeline &mainPipeline = graphicsPipelines[0];
 
     std::vector<vk::DescriptorSetLayout> layouts = {*combinedMeshLayout};
-    LOG_MSG("Attempting to create pipeline layout.");
+
     EXPECTED_VOID(mainPipeline.createPipelineLayout(device.logical(), layouts));
 
-    LOG_MSG("Attempting to load shader modules.");
     auto vertShaderModule = createShaderModuleFromFile(device.logical(), "shaders/vert.spv");
     auto fragShaderModule = createShaderModuleFromFile(device.logical(), "shaders/frag.spv");
 
     if (!vertShaderModule) {
-      LOG_ERROR("Failed to load vertex shader module: " +
-                vertShaderModule.error_or("Unknown error"));
+
     } else {
-      LOG_INFO("Vertex shader module loaded successfully.");
     }
     if (!fragShaderModule) {
-      LOG_ERROR("Failed to load fragment shader module: " +
-                fragShaderModule.error_or("Unknown error"));
+
     } else {
-      LOG_INFO("Fragment shader module loaded successfully.");
     }
 
     if (!vertShaderModule || !fragShaderModule) {
@@ -187,7 +175,6 @@ public:
                    fragShaderModule.error_or("")); // Keep console print
       return;
     }
-    LOG_INFO("Shaders loaded successfully.");
 
     std::vector<vk::PipelineShaderStageCreateInfo> shaderStages = {
         {.stage = vk::ShaderStageFlagBits::eVertex,
@@ -200,7 +187,6 @@ public:
     vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
         .topology = vk::PrimitiveTopology::eTriangleList, .primitiveRestartEnable = false};
 
-    LOG_MSG("Attempting to create graphics pipeline.");
     EXPECTED_VOID(mainPipeline.createGraphicsPipeline(device.logical(), pipelineCache, shaderStages,
                                                       inputAssembly, wd.RenderPass));
 
@@ -215,32 +201,26 @@ public:
   }
 
   void createTexturedCubeScene(u32 currentImageCount) {
-    LOG_SCOPE;
-    LOG_MSG("currentImageCount: " + std::to_string(currentImageCount));
+
     // if (textureStore) {
-    //   LOG_ERROR("TextureStore not initialized in createTexturedCubeScene.");
+    //
     //   std::println("Error: TextureStore not initialized in createTexturedCubeScene.");
     //   return;
     // }
     if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
-      LOG_ERROR("Default graphics pipeline not ready for createTexturedCubeScene.");
+
       std::println("Error: Default graphics pipeline not ready for createTexturedCubeScene.");
       return;
     }
     VulkanPipeline *defaultPipeline = &graphicsPipelines[0];
-    LOG_INFO("Default pipeline obtained.");
 
-    LOG_MSG("Creating cube root node.");
     SceneNode *cubeRootNode = scene.createNode(
         {.transform = Transform{}, .pipeline = defaultPipeline, .name = "CubeRoot"});
     if (!cubeRootNode) {
-      LOG_ERROR("Failed to create cube root node.");
       return;
     }
-    LOG_INFO("Cube root node created: " + cubeRootNode->name);
 
     float cubeSize = 10.0f;
-    LOG_MSG("Cube size: " + std::to_string(cubeSize));
 
     std::array<std::shared_ptr<Texture>, 6> faceTextures = {
         textureStore.getColorTexture2({255, 0, 0, 255}),
@@ -249,7 +229,6 @@ public:
         textureStore.getColorTexture("yellow", {255, 255, 0, 255}),
         textureStore.getColorTexture("cyan", {0, 255, 255, 255}),
         textureStore.getColorTexture("magenta", {255, 0, 255, 255})};
-    LOG_INFO("Face textures obtained from texture store.");
 
     struct FaceDef {
       std::string name;
@@ -272,50 +251,35 @@ public:
          {1, 0, 0},
          {0, -cubeSize / 2.0f, 0},
          faceTextures[5]}};
-    LOG_INFO("Face definitions created.");
 
     for (const auto &def : faceDefs) {
-      LOG_MSG("Processing face: " + def.name);
       std::vector<Vertex> faceVertices =
           createQuadVertices(cubeSize, def.normal, def.up, def.right);
       std::vector<uint32_t> faceIndices = createQuadIndices();
-      LOG_MSG("Vertices and indices created for face: " + def.name);
-
       Material faceMaterial;
       faceMaterial.baseColorFactor = glm::vec4(1.0f);
-
       PBRTextures facePbrTextures;
       facePbrTextures.baseColor =
           def.texture ? def.texture : textureStore.getFallbackDefaultTexture();
-      LOG_MSG("Material and PBR textures set for face: " + def.name);
-
       auto faceMesh =
           std::make_unique<Mesh>(device, def.name, std::move(faceVertices), std::move(faceIndices),
                                  faceMaterial, facePbrTextures, currentImageCount);
-      LOG_INFO("Mesh created for face: " + def.name);
       Mesh *faceMeshPtr = faceMesh.get();
       appOwnedMeshes.emplace_back(std::move(faceMesh));
-      LOG_MSG("Mesh added to appOwnedMeshes for face: " + def.name);
-
       Transform faceTransform;
       faceTransform.translation = def.translation;
-
       SceneNode *faceNode = scene.createNode({.mesh = faceMeshPtr,
                                               .transform = faceTransform,
                                               .pipeline = defaultPipeline,
                                               .parent = cubeRootNode,
                                               .name = def.name + "_Node"});
       if (!faceNode) {
-        LOG_ERROR("Failed to create scene node for face: " + def.name);
       } else {
-        LOG_INFO("Scene node created for face: " + faceNode->name);
       }
     }
     if (cubeRootNode) {
       cubeRootNode->transform.rotation_speed_euler_dps = {10.f, 15.f, 5.f};
-      LOG_MSG("Set rotation speed for cube root node.");
     }
-    LOG_INFO("Finished creating textured cube scene.");
   }
 
   void createDebugAxesScene(u32 currentImageCount) {
@@ -410,7 +374,7 @@ public:
   }
 
   void SetupVulkan() {
-    LOG_SCOPE;
+
     EXPECTED_VOID(instance.create());
     if (!NDEBUG) {
       EXPECTED_VOID(instance.setupDebugMessenger());
@@ -426,54 +390,47 @@ public:
   }
 
   void SetupVulkanWindow(SDL_Window *sdl_window, vk::Extent2D extent) {
-    LOG_SCOPE;
-    LOG_MSG("Window extent: " + std::to_string(extent.width) + "x" + std::to_string(extent.height));
+
     VkSurfaceKHR surface_raw_handle;
-    LOG_MSG("Attempting to create Vulkan surface via SDL.");
+
     if (SDL_Vulkan_CreateSurface(sdl_window, instance.get_C_handle(), nullptr,
                                  &surface_raw_handle) == 0) {
       std::string errorMsg =
           "Failed to create Vulkan surface via SDL: " + std::string(SDL_GetError());
-      LOG_ERROR(errorMsg);
+
       std::println("{}", errorMsg);
       std::exit(EXIT_FAILURE);
     }
     wd.Surface = vk::raii::SurfaceKHR(instance, surface_raw_handle);
-    LOG_INFO("Vulkan surface created successfully.");
 
     std::vector<vk::Format> requestSurfaceImageFormat = {
         vk::Format::eB8G8R8A8Srgb, vk::Format::eR8G8B8A8Srgb, vk::Format::eB8G8R8A8Unorm,
         vk::Format::eR8G8B8A8Unorm};
-    LOG_MSG("Selecting surface format.");
+
     wd.config.SurfaceFormat =
         selectSurfaceFormat(device.physical(), wd.Surface, requestSurfaceImageFormat,
                             vk::ColorSpaceKHR::eSrgbNonlinear);
-    LOG_INFO("Surface format selected: " + vk::to_string(wd.config.SurfaceFormat.format));
 
 #ifdef APP_USE_UNLIMITED_FRAME_RATE
     std::vector<vk::PresentModeKHR> present_modes = {vk::PresentModeKHR::eMailbox,
                                                      vk::PresentModeKHR::eFifo};
-    LOG_MSG("Requesting Mailbox or Fifo present mode.");
+
 #else
     std::vector<vk::PresentModeKHR> present_modes = {vk::PresentModeKHR::eFifo};
-    LOG_MSG("Requesting Fifo present mode.");
+
 #endif
     wd.config.PresentMode = selectPresentMode(device.physical(), wd.Surface, present_modes);
-    LOG_INFO("Present mode selected: " + vk::to_string(wd.config.PresentMode));
 
     wd.config.ClearEnable = true;
     wd.config.ClearValue.color = vk::ClearColorValue(std::array<float, 4>{0.f, 0.f, 0.f, 1.0f});
 
-    LOG_MSG("Attempting to create or resize window (swapchain, renderpass, etc.).");
     createOrResizeWindow(instance, device, wd, extent, MIN_IMAGE_COUNT);
-    LOG_INFO("Window created/resized successfully.");
-    LOG_INFO("SetupVulkanWindow completed.");
   }
 
   void FrameRender(ImDrawData *draw_data, float deltaTime) {
-    LOG_SCOPE; // This is too frequent, log specific parts
+
     if (!*wd.Swapchain) {
-      LOG_WARN("FrameRender: Swapchain not ready, skipping render.");
+
       return;
     }
 
@@ -481,7 +438,7 @@ public:
     auto &render_complete_semaphore = wd.FrameSemaphores[wd.SemaphoreIndex].RenderCompleteSemaphore;
 
     constexpr uint64_t timeout = std::numeric_limits<uint64_t>::max();
-    LOG_MSG("Acquiring next image. SemaphoreIndex: " + std::to_string(wd.SemaphoreIndex));
+
     auto [acquireRes, imageIndexx] = device.logical().acquireNextImage2KHR({
         .swapchain = wd.Swapchain,
         .timeout = timeout,
@@ -491,44 +448,33 @@ public:
     uint32_t imageIndex = imageIndexx;
 
     if (acquireRes == vk::Result::eErrorOutOfDateKHR || acquireRes == vk::Result::eSuboptimalKHR) {
-      LOG_WARN("AcquireNextImage: Swapchain out of date or suboptimal. Setting swapChainRebuild = "
-               "true. Result: " +
-               vk::to_string(acquireRes));
       swapChainRebuild = true;
       if (acquireRes == vk::Result::eErrorOutOfDateKHR) {
-        LOG_MSG("AcquireNextImage: OutOfDateKHR, returning early from FrameRender.");
+
         return;
       }
     } else if (acquireRes != vk::Result::eSuccess) {
-      LOG_ERROR("Error acquiring swapchain image: " + vk::to_string(acquireRes));
+
       std::println("Error acquiring swapchain image: {}", vk::to_string(acquireRes));
       return;
     }
     wd.FrameIndex = imageIndex;
-    LOG_MSG("Image acquired successfully. FrameIndex: " + std::to_string(wd.FrameIndex));
 
     Frame &currentFrame = wd.Frames[wd.FrameIndex];
 
-    LOG_MSG("Waiting for fence for frame " + std::to_string(wd.FrameIndex));
     check_vk_result_hpp(device.logical().waitForFences(*currentFrame.Fence, VK_TRUE, UINT64_MAX));
     device.logical().resetFences({*currentFrame.Fence});
-    LOG_MSG("Fence reset for frame " + std::to_string(wd.FrameIndex));
 
-    LOG_MSG("Resetting command pool and beginning command buffer for frame " +
-            std::to_string(wd.FrameIndex));
     currentFrame.CommandPool.reset();
     currentFrame.CommandBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
-    LOG_MSG("Updating scene hierarchy for frame " + std::to_string(wd.FrameIndex));
     scene.updateHierarchy(wd.FrameIndex, camera.GetViewMatrix(),
                           camera.GetProjectionMatrix((float)wd.config.swapchainExtent.width /
                                                      (float)wd.config.swapchainExtent.height),
                           deltaTime); // Use actual deltaTime
 
-    LOG_MSG("Updating all descriptor set contents for frame " + std::to_string(wd.FrameIndex));
     scene.updateAllDescriptorSetContents(wd.FrameIndex);
 
-    LOG_MSG("Beginning render pass for frame " + std::to_string(wd.FrameIndex));
     std::array<vk::ClearValue, 2> clearValues{};
     clearValues[0].color = wd.config.ClearValue.color;
     clearValues[1].depthStencil = {1.0f, 0};
@@ -547,17 +493,13 @@ public:
                         (float)wd.config.swapchainExtent.height, 0.0f, 1.0f});
     currentFrame.CommandBuffer.setScissor(0, vk::Rect2D{{0, 0}, wd.config.swapchainExtent});
 
-    LOG_MSG("Drawing scene for frame " + std::to_string(wd.FrameIndex));
     scene.draw(currentFrame.CommandBuffer, wd.FrameIndex);
 
-    LOG_MSG("Rendering ImGui for frame " + std::to_string(wd.FrameIndex));
     ImGui_ImplVulkan_RenderDrawData(draw_data, *currentFrame.CommandBuffer);
 
     currentFrame.CommandBuffer.endRenderPass();
     currentFrame.CommandBuffer.end();
-    LOG_MSG("Render pass and command buffer ended for frame " + std::to_string(wd.FrameIndex));
 
-    LOG_MSG("Submitting command buffer for frame " + std::to_string(wd.FrameIndex));
     vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     vk::SubmitInfo submitInfo{.waitSemaphoreCount = 1,
                               .pWaitSemaphores = &*image_acquired_semaphore,
@@ -567,15 +509,11 @@ public:
                               .signalSemaphoreCount = 1,
                               .pSignalSemaphores = &*render_complete_semaphore};
     device.queue.submit({submitInfo}, *currentFrame.Fence);
-    LOG_MSG("Command buffer submitted for frame " + std::to_string(wd.FrameIndex));
   }
 
   void FramePresent() {
-    LOG_SCOPE; // Too frequent
+
     if (swapChainRebuild || !*wd.Swapchain) {
-      LOG_WARN("FramePresent: Swapchain rebuild pending or swapchain not ready. Skipping present. "
-               "swapChainRebuild=" +
-               std::to_string(swapChainRebuild));
       return;
     }
 
@@ -586,20 +524,14 @@ public:
                                    .pSwapchains = &*wd.Swapchain,
                                    .pImageIndices = &wd.FrameIndex};
 
-    LOG_MSG("Presenting image. SemaphoreIndex: " + std::to_string(wd.SemaphoreIndex) +
-            ", FrameIndex: " + std::to_string(wd.FrameIndex));
     vk::Result presentResult = device.queue.presentKHR(presentInfo);
     if (presentResult == vk::Result::eErrorOutOfDateKHR ||
         presentResult == vk::Result::eSuboptimalKHR) {
-      LOG_WARN("PresentKHR: Swapchain out of date or suboptimal. Setting swapChainRebuild = true. "
-               "Result: " +
-               vk::to_string(presentResult));
       swapChainRebuild = true;
     } else if (presentResult != vk::Result::eSuccess) {
-      LOG_ERROR("Error presenting swapchain image: " + vk::to_string(presentResult));
+
       std::println("Error presenting swapchain image: {}", vk::to_string(presentResult));
     } else {
-      LOG_MSG("Image presented successfully.");
     }
     wd.SemaphoreIndex = (wd.SemaphoreIndex + 1) % wd.FrameSemaphores.size();
   }
@@ -611,7 +543,7 @@ public:
   }
 
   void ProcessKeyboard(Camera &cam, SDL_Scancode key, float dt) {
-    LOG_SCOPE; // Too frequent
+
     float velocity = cam.MovementSpeed * dt;
     if (key == SDL_SCANCODE_W)
       cam.Position += cam.Front * velocity;
@@ -628,7 +560,7 @@ public:
   }
 
   void updateCamera(float dt) {
-    LOG_SCOPE; // Too frequent
+
     const auto keystate = SDL_GetKeyboardState(nullptr);
     if (keystate[SDL_SCANCODE_W])
       ProcessKeyboard(camera, SDL_SCANCODE_W, dt);
@@ -645,10 +577,9 @@ public:
   }
 
   void mainLoop(SDL_Window *sdl_window) {
-    LOG_SCOPE;
+
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    LOG_INFO("ImGui NavEnableKeyboard set.");
 
     using Clock = std::chrono::high_resolution_clock;
     auto previousTime = Clock::now();
@@ -658,7 +589,6 @@ public:
     // bool firstMouse = true; // Not used currently
     // float lastMouseX = static_cast<float>(wd.config.swapchainExtent.width / 2.0f); // Not used
     // float lastMouseY = static_cast<float>(wd.config.swapchainExtent.height / 2.0f); // Not used
-    LOG_INFO("Main loop starting.");
 
     while (!done) {
       auto currentTime = Clock::now();
@@ -669,26 +599,23 @@ public:
       while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL3_ProcessEvent(&event);
         if (event.type == SDL_EVENT_QUIT) {
-          LOG_INFO("SDL_EVENT_QUIT received.");
+
           done = true;
         }
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
             event.window.windowID == SDL_GetWindowID(sdl_window)) {
-          LOG_INFO("SDL_EVENT_WINDOW_CLOSE_REQUESTED received.");
+
           done = true;
         }
 
         if (event.type == SDL_EVENT_WINDOW_MINIMIZED) {
-          LOG_INFO("SDL_EVENT_WINDOW_MINIMIZED received.");
         }
         if (event.type == SDL_EVENT_WINDOW_RESTORED) {
-          LOG_INFO("SDL_EVENT_WINDOW_RESTORED received, setting swapChainRebuild = true.");
+
           swapChainRebuild = true;
         }
         if (event.type == SDL_EVENT_WINDOW_RESIZED ||
             event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
-          LOG_INFO("SDL_EVENT_WINDOW_RESIZED or SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED received, "
-                   "setting swapChainRebuild = true.");
           swapChainRebuild = true;
         }
       }
@@ -697,42 +624,33 @@ public:
       camera.updateVectors();
 
       if (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_MINIMIZED) {
-        LOG_MSG("Window minimized, sleeping."); // Can be spammy
+
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
       }
 
       vk::Extent2D currentExtent = get_window_size(sdl_window);
       if (currentExtent.width == 0 || currentExtent.height == 0) {
-        LOG_WARN("Window extent is zero, sleeping."); // Can be spammy
+
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
       }
 
       if (swapChainRebuild || wd.config.swapchainExtent.width != currentExtent.width ||
           wd.config.swapchainExtent.height != currentExtent.height) {
-        LOG_INFO("Rebuilding swapchain. Current extent: " + std::to_string(currentExtent.width) +
-                 "x" + std::to_string(currentExtent.height) +
-                 ", Old extent: " + std::to_string(wd.config.swapchainExtent.width) + "x" +
-                 std::to_string(wd.config.swapchainExtent.height) +
-                 ", swapChainRebuild flag: " + std::to_string(swapChainRebuild));
-        LOG_MSG("Waiting for logical device idle before rebuilding swapchain.");
-        device.logical().waitIdle();
-        LOG_MSG("Logical device idle. Proceeding with createOrResizeWindow.");
-        createOrResizeWindow(instance, device, wd, currentExtent, MIN_IMAGE_COUNT);
-        LOG_INFO("Swapchain/window resources recreated.");
 
-        LOG_MSG("Updating scene image count to: " + std::to_string(wd.Frames.size()));
+        device.logical().waitIdle();
+
+        createOrResizeWindow(instance, device, wd, currentExtent, MIN_IMAGE_COUNT);
+
         scene.setImageCount(static_cast<u32>(wd.Frames.size()));
-        LOG_MSG("Allocating all descriptor sets for the scene.");
+
         scene.allocateAllDescriptorSets(device.descriptorPool, combinedMeshLayout);
-        LOG_MSG("Updating all descriptor set contents for the scene.");
+
         for (u32 i = 0; i < wd.Frames.size(); ++i)
           scene.updateAllDescriptorSetContents(i);
-        LOG_INFO("Scene descriptor sets reallocated and updated.");
 
         swapChainRebuild = false;
-        LOG_MSG("swapChainRebuild set to false.");
       }
 
       ImGui_ImplVulkan_NewFrame();
@@ -749,42 +667,31 @@ public:
       FramePresent();
       // std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    LOG_INFO("Main loop finished.");
   }
 
 public:
   int run(SDL_Window *sdl_window) {
-    LOG_SCOPE;
-    LOG_INFO("Application run started.");
+
     SetupVulkan();
-    LOG_INFO("Vulkan setup completed.");
+
     SetupVulkanWindow(sdl_window, get_window_size(sdl_window));
-    LOG_INFO("Vulkan window setup completed.");
 
     u32 numMeshesEstimate = 10;
-    LOG_MSG("Creating descriptor pool. Estimated meshes: " + std::to_string(numMeshesEstimate) +
-            ", Image count: " + std::to_string(wd.Frames.size()));
+
     EXPECTED_VOID(
         device.createDescriptorPool(static_cast<u32>(wd.Frames.size()) * numMeshesEstimate));
 
     createPipelines();
-    LOG_INFO("Pipelines created.");
 
-    LOG_MSG("Initializing scene with image count: " + std::to_string(wd.Frames.size()));
     scene = Scene(static_cast<u32>(wd.Frames.size()));
     createTexturedCubeScene(static_cast<u32>(wd.Frames.size()));
     createDebugAxesScene(static_cast<u32>(wd.Frames.size()));
 
-    LOG_INFO("Textured cube scene created.");
-
-    LOG_MSG("Allocating initial descriptor sets for the scene.");
     scene.allocateAllDescriptorSets(device.descriptorPool, combinedMeshLayout);
-    LOG_MSG("Updating initial descriptor set contents for the scene.");
+
     for (u32 i = 0; i < wd.Frames.size(); ++i)
       scene.updateAllDescriptorSetContents(i);
-    LOG_INFO("Initial scene descriptor sets allocated and updated.");
 
-    LOG_MSG("Setting up ImGui.");
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
@@ -803,26 +710,19 @@ public:
     init_info.PipelineCache = *pipelineCache;
     init_info.Subpass = 0;
     init_info.CheckVkResultFn = check_vk_result; // Global one
-    LOG_MSG("ImGui Vulkan InitInfo populated.");
 
     ImGui_ImplVulkan_Init(&init_info);
-    LOG_INFO("ImGui Vulkan backend initialized.");
+
     ImGui_ImplVulkan_CreateFontsTexture();
-    LOG_INFO("ImGui fonts texture created.");
 
     mainLoop(sdl_window);
-    LOG_INFO("Main loop exited.");
 
-    LOG_MSG("Cleaning up: waiting for logical device idle.");
     device.logical().waitIdle();
-    LOG_INFO("Logical device idle. Shutting down ImGui.");
+
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
-    LOG_INFO("ImGui shutdown completed.");
 
-    LOG_INFO("Application run finished. Logger will be shut down by App destructor or explicitly "
-             "if needed.");
     Logger::Shutdown(); // Explicitly shutdown here if App destructor might not be called
     // reliably on crash
     return 0;
@@ -845,7 +745,7 @@ export struct SDL_Wrapper {
     }
     if (!SDL_Init(SDL_INIT_VIDEO)) {
       std::cerr << "[SDL_Wrapper] Error: SDL_Init(): " << SDL_GetError() << std::endl;
-      LOG_ERROR(std::string("SDL_Init() failed: ") + SDL_GetError());
+
       return -1;
     }
     std::cout << "[SDL_Wrapper] SDL_Init(SDL_INIT_VIDEO) successful." << std::endl;
@@ -857,16 +757,16 @@ export struct SDL_Wrapper {
     window = SDL_CreateWindow("Dear ImGui SDL3+Vulkan example", 1280, 720, window_flags);
     if (window == nullptr) {
       std::cerr << "[SDL_Wrapper] Error: SDL_CreateWindow(): " << SDL_GetError() << std::endl;
-      LOG_ERROR(std::string("SDL_CreateWindow() failed: ") + SDL_GetError());
+
       return -1;
     }
     std::cout << "[SDL_Wrapper] SDL_CreateWindow successful." << std::endl;
-    LOG_INFO("SDL_Wrapper::init successful.");
+
     return 0;
   }
 
   void terminate() {
-    LOG_SCOPE; // If logger is available and App object still exists
+
     std::cout << "[SDL_Wrapper] terminate called" << std::endl;
     if (window) {
       SDL_DestroyWindow(window);
@@ -876,7 +776,6 @@ export struct SDL_Wrapper {
     SDL_PumpEvents(); // Process any pending events
     SDL_Quit();
     std::cout << "[SDL_Wrapper] SDL_Quit called." << std::endl;
-    LOG_INFO("SDL_Wrapper::terminate finished.");
   }
 };
 
