@@ -10,7 +10,6 @@ find_package(Vulkan REQUIRED)
 
 set(CPM_SOURCE_CACHE "${CMAKE_CURRENT_SOURCE_DIR}/.cpm_cache")
 
-# Download CPM.cmake if it's not already present
 if(NOT EXISTS "${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake")
     file(DOWNLOAD https://github.com/cpm-cmake/CPM.cmake/releases/latest/download/CPM.cmake
          ${CMAKE_CURRENT_BINARY_DIR}/cmake/CPM.cmake)
@@ -58,8 +57,10 @@ target_compile_definitions(AppModule PRIVATE
     VULKAN_HPP_NO_SMART_HANDLE
     VULKAN_HPP_NO_EXCEPTIONS
     VULKAN_HPP_NO_CONSTRUCTORS
+    # VULKAN_HPP_STD_MODULE std
     # VULKAN_HPP_ENABLE_STD_MODULE
     VK_USE_PLATFORM_WAYLAND_KHR
+    VMA_BUILD_CXX_MODULE
     SDL_MAIN_HANDLED  # Prevent SDL from overriding main()
     # VMA_ENABLE_STD_MODULE
     # APP_USE_UNLIMITED_FRAME_RATE
@@ -68,9 +69,10 @@ target_compile_definitions(AppModule PRIVATE
 target_sources(AppModule
     PUBLIC
         FILE_SET CXX_MODULES
-        BASE_DIRS ${Vulkan_INCLUDE_DIR} src
+        BASE_DIRS ${Vulkan_INCLUDE_DIR} src ${VulkanMemoryAllocatorHpp_SOURCE_DIR}
         FILES
         ${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm
+        ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/src/vk_mem_alloc.cppm
         src/app.cppm
         src/extra.cppm
         src/VulkanWindow.cppm
@@ -110,6 +112,7 @@ target_include_directories(AppModule PRIVATE
   # will be propagated automatically when linking.
   # If VulkanMemoryAllocatorHpp_SOURCE_DIR was needed (e.g. for DOWNLOAD_ONLY):
   ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/VulkanMemoryAllocator/include
+  ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/include
 )
 
 target_link_libraries(AppModule PRIVATE
@@ -117,7 +120,8 @@ target_link_libraries(AppModule PRIVATE
     Vulkan::Vulkan
     tinygltf
     # GPUOpen::VulkanMemoryAllocator
-    VulkanMemoryAllocator-Hpp::VulkanMemoryAllocator-Hpp
+    # VulkanMemoryAllocator-Hpp::VulkanMemoryAllocator-Hpp
+    # VulkanMemoryAllocator-Hpp-Module
 )
 
 add_executable(${PROJECT_NAME}

@@ -245,12 +245,7 @@ public:
         {"LeftFace", {-1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {-cubeSize / 2.0f, 0, 0}, faceTextures[2]},
         {"RightFace", {1, 0, 0}, {0, 1, 0}, {0, 0, -1}, {cubeSize / 2.0f, 0, 0}, faceTextures[3]},
         {"TopFace", {0, 1, 0}, {0, 0, -1}, {1, 0, 0}, {0, cubeSize / 2.0f, 0}, faceTextures[4]},
-        {"BottomFace",
-         {0, -1, 0},
-         {0, 0, 1},
-         {1, 0, 0},
-         {0, -cubeSize / 2.0f, 0},
-         faceTextures[5]}};
+        {"BottomFace", {0, -1, 0}, {0, 0, 1}, {1, 0, 0}, {0, -cubeSize / 2.f, 0}, faceTextures[5]}};
 
     for (const auto &def : faceDefs) {
       std::vector<Vertex> faceVertices =
@@ -734,13 +729,7 @@ export struct SDL_Wrapper {
 
   int init() {
     Logger::Init("vulkan_app_log.txt"); // Initialize logger here
-    // Logger might not be initialized yet if SDL_Wrapper is created before App
-    // So, using std::cerr for these critical early logs.
-    // Logger::Log("SDL_Wrapper::init called", "DEBUG"); // If logger is available
-    std::cout << "[SDL_Wrapper] init called" << std::endl;
-
     if constexpr (VK_USE_PLATFORM_WAYLAND_KHR) {
-      std::cout << "[SDL_Wrapper] Setting SDL_HINT_VIDEO_DRIVER to wayland" << std::endl;
       SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
     }
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -748,34 +737,25 @@ export struct SDL_Wrapper {
 
       return -1;
     }
-    std::cout << "[SDL_Wrapper] SDL_Init(SDL_INIT_VIDEO) successful." << std::endl;
-
     SDL_WindowFlags window_flags =
         (SDL_WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
                           SDL_WINDOW_HIGH_PIXEL_DENSITY); // Start hidden, show after Vulkan setup
-    std::cout << "[SDL_Wrapper] Attempting to create SDL window." << std::endl;
     window = SDL_CreateWindow("Dear ImGui SDL3+Vulkan example", 1280, 720, window_flags);
     if (window == nullptr) {
       std::cerr << "[SDL_Wrapper] Error: SDL_CreateWindow(): " << SDL_GetError() << std::endl;
 
       return -1;
     }
-    std::cout << "[SDL_Wrapper] SDL_CreateWindow successful." << std::endl;
-
     return 0;
   }
 
   void terminate() {
-
-    std::cout << "[SDL_Wrapper] terminate called" << std::endl;
     if (window) {
       SDL_DestroyWindow(window);
       window = nullptr;
-      std::cout << "[SDL_Wrapper] SDL_DestroyWindow called." << std::endl;
     }
     SDL_PumpEvents(); // Process any pending events
     SDL_Quit();
-    std::cout << "[SDL_Wrapper] SDL_Quit called." << std::endl;
   }
 };
 

@@ -3,7 +3,6 @@ module;
 #include "imgui.h"
 #include "macros.hpp"
 #include "primitive_types.hpp"
-#include "vulkan/vulkan_core.h"
 #include <SDL3/SDL_vulkan.h>
 
 export module vulkan_app:VulkanInstance;
@@ -59,8 +58,7 @@ public:
             .messageType = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
                            vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
                            vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
-            .pfnUserCallback =
-                reinterpret_cast<PFN_vkDebugUtilsMessengerCallbackEXT>(debugCallback),
+            .pfnUserCallback = debugCallback,
         });
         expected) {
       debugMessenger = std::move(*expected);

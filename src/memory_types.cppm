@@ -1,7 +1,5 @@
 module;
 
-#include "vk_mem_alloc.hpp"
-
 #include "macros.hpp"
 #include "primitive_types.hpp"
 
@@ -9,12 +7,13 @@ export module vulkan_app:VMA;
 
 import vulkan_hpp;
 import std;
+import vk_mem_alloc_hpp;
 
 // RAII Wrapper for a VMA-allocated buffer
 export struct VmaBuffer {
-  vma::Allocator allocator_ = VK_NULL_HANDLE; // Store the allocator that created this buffer
-  VkBuffer buffer_ = VK_NULL_HANDLE;
-  vma::Allocation allocation_ = VK_NULL_HANDLE;
+  vma::Allocator allocator_{nullptr}; // Store the allocator that created this buffer
+  vk::Buffer buffer_{nullptr};
+  vma::Allocation allocation_{nullptr};
   vma::AllocationInfo allocationInfo_{};
   vk::DeviceSize size_ = 0;     // Store size for potential re-creation or info
   void *pMappedData_ = nullptr; // If persistently mapped
@@ -23,7 +22,7 @@ export struct VmaBuffer {
   VmaBuffer() = default;
 
   // Constructor to be used by factory functions (like VulkanDevice::createBufferWithVma)
-  VmaBuffer(vma::Allocator allocator, VkBuffer buffer, vma::Allocation allocation,
+  VmaBuffer(vma::Allocator allocator, vk::Buffer buffer, vma::Allocation allocation,
             const vma::AllocationInfo &allocInfo, vk::DeviceSize size)
       : allocator_(allocator), buffer_(buffer), allocation_(allocation), allocationInfo_(allocInfo),
         size_(size) {
@@ -43,9 +42,9 @@ export struct VmaBuffer {
         allocationInfo_(other.allocationInfo_), size_(other.size_),
         pMappedData_(other.pMappedData_) {
     // Reset other to prevent double deletion
-    other.allocator_ = VK_NULL_HANDLE;
-    other.buffer_ = VK_NULL_HANDLE;
-    other.allocation_ = VK_NULL_HANDLE;
+    other.allocator_ = nullptr;
+    other.buffer_ = nullptr;
+    other.allocation_ = nullptr;
     other.pMappedData_ = nullptr;
     other.size_ = 0;
   }
@@ -62,9 +61,9 @@ export struct VmaBuffer {
       size_ = other.size_;
       pMappedData_ = other.pMappedData_;
 
-      other.allocator_ = VK_NULL_HANDLE;
-      other.buffer_ = VK_NULL_HANDLE;
-      other.allocation_ = VK_NULL_HANDLE;
+      other.allocator_ = nullptr;
+      other.buffer_ = nullptr;
+      other.allocation_ = nullptr;
       other.pMappedData_ = nullptr;
       other.size_ = 0;
     }
@@ -88,18 +87,18 @@ export struct VmaBuffer {
       // mapping. This RAII wrapper doesn't manage that state perfectly without more info. For now,
       // assume vmaDestroyBuffer is sufficient.
 
-      vmaDestroyBuffer(allocator_, buffer_, allocation_);
+      allocator_.destroyBuffer(buffer_, allocation_);
     }
-    allocator_ = VK_NULL_HANDLE;
-    buffer_ = VK_NULL_HANDLE;
-    allocation_ = VK_NULL_HANDLE;
+    allocator_ = nullptr;
+    buffer_ = nullptr;
+    allocation_ = nullptr;
     pMappedData_ = nullptr;
     size_ = 0;
     allocationInfo_ = vma::AllocationInfo{};
   }
 
   // Accessors
-  VkBuffer get() const { return buffer_; }
+  vk::Buffer get() const { return buffer_; }
   vma::Allocation getAllocation() const { return allocation_; }
   const vma::AllocationInfo &getAllocationInfo() const { return allocationInfo_; }
   vk::DeviceSize getSize() const { return size_; }
@@ -115,16 +114,16 @@ export struct VmaBuffer {
 
 // RAII Wrapper for a VMA-allocated image
 export struct VmaImage {
-  vma::Allocator allocator_ = VK_NULL_HANDLE;
-  VkImage image_ = VK_NULL_HANDLE;
-  vma::Allocation allocation_ = VK_NULL_HANDLE;
+  vma::Allocator allocator_ = nullptr;
+  vk::Image image_ = nullptr;
+  vma::Allocation allocation_ = nullptr;
   vma::AllocationInfo allocationInfo_{};
   vk::Format format_ = vk::Format::eUndefined;
   vk::Extent3D extent_ = {0, 0, 0};
 
   VmaImage() = default;
 
-  VmaImage(vma::Allocator allocator, VkImage image, vma::Allocation allocation,
+  VmaImage(vma::Allocator allocator, vk::Image image, vma::Allocation allocation,
            const vma::AllocationInfo &allocInfo, vk::Format format, vk::Extent3D extent)
       : allocator_(allocator), image_(image), allocation_(allocation), allocationInfo_(allocInfo),
         format_(format), extent_(extent) {}
@@ -134,9 +133,9 @@ export struct VmaImage {
   VmaImage(VmaImage &&other) noexcept
       : allocator_(other.allocator_), image_(other.image_), allocation_(other.allocation_),
         allocationInfo_(other.allocationInfo_), format_(other.format_), extent_(other.extent_) {
-    other.allocator_ = VK_NULL_HANDLE;
-    other.image_ = VK_NULL_HANDLE;
-    other.allocation_ = VK_NULL_HANDLE;
+    other.allocator_ = nullptr;
+    other.image_ = nullptr;
+    other.allocation_ = nullptr;
     other.format_ = vk::Format::eUndefined;
     other.extent_ = {0, 0, 0};
   }
@@ -151,9 +150,9 @@ export struct VmaImage {
       format_ = other.format_;
       extent_ = other.extent_;
 
-      other.allocator_ = VK_NULL_HANDLE;
-      other.image_ = VK_NULL_HANDLE;
-      other.allocation_ = VK_NULL_HANDLE;
+      other.allocator_ = nullptr;
+      other.image_ = nullptr;
+      other.allocation_ = nullptr;
       other.format_ = vk::Format::eUndefined;
       other.extent_ = {0, 0, 0};
     }
@@ -165,39 +164,39 @@ export struct VmaImage {
 
   void release() {
     if (allocator_ && image_ && allocation_) {
-      vmaDestroyImage(allocator_, image_, allocation_);
+      allocator_.destroyImage(image_, allocation_);
     }
-    allocator_ = VK_NULL_HANDLE;
-    image_ = VK_NULL_HANDLE;
-    allocation_ = VK_NULL_HANDLE;
+    allocator_ = nullptr;
+    image_ = nullptr;
+    allocation_ = nullptr;
     format_ = vk::Format::eUndefined;
     extent_ = {0, 0, 0};
     allocationInfo_ = vma::AllocationInfo{};
   }
 
-  VkImage get() const { return image_; }
+  vk::Image get() const { return image_; }
   vma::Allocation getAllocation() const { return allocation_; }
   const vma::AllocationInfo &getAllocationInfo() const { return allocationInfo_; }
   vk::Format getFormat() const { return format_; }
   vk::Extent3D getExtent() const { return extent_; }
 
-  explicit operator bool() const { return image_ != VK_NULL_HANDLE && allocation_; }
+  explicit operator bool() const { return image_ && allocation_; }
   // operator vk::Image() const { return vk::Image(image_); }
 };
 
 // Helper function to initialize the VMA Allocator (remains the same)
 export std::expected<vma::Allocator, std::string>
 createVmaAllocator(vk::Instance instance, vk::PhysicalDevice physicalDevice, vk::Device device) {
-  uint32_t apiVersion = VK_API_VERSION_1_0;
+  uint32_t apiVersion = vk::makeApiVersion(0, 1, 0, 0);
   auto instanceVersionResult = vk::enumerateInstanceVersion();
   if (instanceVersionResult.result == vk::Result::eSuccess) {
     apiVersion = instanceVersionResult.value;
   }
   vma::AllocatorCreateInfo allocatorInfo = {
-      .flags = vma::AllocatorCreateFlags{VMA_ALLOCATION_CREATE_MAPPED_BIT},
-      .physicalDevice = static_cast<VkPhysicalDevice>(physicalDevice),
-      .device = static_cast<VkDevice>(device),
-      .instance = static_cast<VkInstance>(instance),
+      // .flags = vma::AllocatorCreateFlags{VMA_ALLOCATION_CREATE_MAPPED_BIT}, wrong flag
+      .physicalDevice = static_cast<vk::PhysicalDevice>(physicalDevice),
+      .device = static_cast<vk::Device>(device),
+      .instance = static_cast<vk::Instance>(instance),
       .vulkanApiVersion = apiVersion,
   };
 

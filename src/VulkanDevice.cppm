@@ -3,12 +3,12 @@ module;
 #include "imgui_impl_vulkan.h"
 #include "macros.hpp"
 #include "primitive_types.hpp"
-#include "vk_mem_alloc.hpp"
 
 export module vulkan_app:VulkanDevice;
 
 import vulkan_hpp;
 import std;
+import vk_mem_alloc_hpp;
 import :VMA;
 
 export struct BufferResources {
@@ -21,7 +21,7 @@ private:
   vk::raii::PhysicalDevice physicalDevice{nullptr};
   vk::raii::Device device{nullptr};
   const vk::raii::Instance &instance;
-  vma::Allocator VmaAllocator;
+  vma::Allocator vmaAllocator_;
 
 public:
   u32 queueFamily = (u32)-1;
@@ -60,6 +60,8 @@ private:
 public:
   const vk::raii::Device &logical() const { return device; }
   const vk::raii::PhysicalDevice &physical() const { return physicalDevice; }
+
+  ~VulkanDevice() { vmaAllocator_.destroy(); }
 
   ImGui_ImplVulkan_InitInfo init_info() {
     return ImGui_ImplVulkan_InitInfo{
@@ -125,11 +127,10 @@ public:
     }
 
     if (auto expected = createVmaAllocator(instance, physicalDevice, device); expected) {
-      VmaAllocator = std::move(*expected);
+      vmaAllocator_ = std::move(*expected);
       return {};
     } else {
-      return std::unexpected(
-          std::format("Failed to create Vma allocator: {}", vk::to_string(expected.error())));
+      return std::unexpected(std::format("Failed to create Vma allocator:"));
     }
   }
 
@@ -225,5 +226,70 @@ public:
     // device.bindBufferMemory2(vk::BindBufferMemoryInfo{
     //     .buffer = resources.buffer, .memory = resources.memory, .memoryOffset = 0});
     return resources;
+  }
+
+  [[nodiscard]] std::expected<VmaBuffer, std::string> createBufferVMA(
+      const vk::BufferCreateInfo &bufferCreateInfo,         // Pass vk::BufferCreateInfo directly
+      const vma::AllocationCreateInfo &allocationCreateInfo // Pass vma::AllocationCreateInfo
+      ) NOEXCEPT {
+    if (!vmaAllocator_) {
+      return std::unexpected("VMA Allocator not initialized in VulkanDevice::createBufferVMA.");
+    }
+    if (bufferCreateInfo.size == 0) {
+      return std::unexpected("VulkanDevice::createBufferVMA: Buffer size cannot be zero.");
+    }
+
+    // vma::Allocator::createBuffer returns std::pair<vk::Buffer, vma::Allocation>
+    // or throws on error if exceptions are enabled in vulkan-hpp.
+    // With VULKAN_HPP_NO_EXCEPTIONS, it should return vk::ResultValue<std::pair<...>>
+
+    // Need to convert vk::BufferCreateInfo to VkBufferCreateInfo (C-style) for VMA C++ bindings if
+    // they expect it, or check if vma::Allocator::createBuffer can take vk::BufferCreateInfo
+    // directly. The vk-mem-alloc-hpp createBuffer takes const VkBufferCreateInfo*.
+    vk::BufferCreateInfo c_bufferCreateInfo = bufferCreateInfo;
+    vma::AllocationCreateInfo c_allocationCreateInfo =
+        allocationCreateInfo; // vma::AllocationCreateInfo is already a struct
+
+    vk::Buffer outBuffer;
+    vma::Allocation outAllocation;
+    vma::AllocationInfo outAllocInfo; // To get mapped data if applicable
+
+    // Use the vma::Allocator member function
+    vk::Result result = vmaAllocator_.createBuffer(&c_bufferCreateInfo, &c_allocationCreateInfo,
+                                                   &outBuffer,     // Takes vk::Buffer&
+                                                   &outAllocation, // Takes vma::Allocation&
+                                                   &outAllocInfo);
+
+    if (result != vk::Result::eSuccess) {
+      return std::unexpected("VMA failed to create buffer: " + vk::to_string(result));
+    }
+
+    return VmaBuffer(vmaAllocator_, outBuffer, outAllocation, outAllocInfo, bufferCreateInfo.size);
+  }
+
+  [[nodiscard]] std::expected<VmaImage, std::string> createImageVMA(
+      const vk::ImageCreateInfo &imageCreateInfo,           // Pass vk::ImageCreateInfo directly
+      const vma::AllocationCreateInfo &allocationCreateInfo // Pass vma::AllocationCreateInfo
+      ) NOEXCEPT {
+    if (!vmaAllocator_) {
+      return std::unexpected("VMA Allocator not initialized in VulkanDevice::createImageVMA.");
+    }
+
+    vk::ImageCreateInfo c_imageCreateInfo = imageCreateInfo;
+    vma::AllocationCreateInfo c_allocationCreateInfo = allocationCreateInfo;
+
+    vk::Image outImage;
+    vma::Allocation outAllocation;
+    vma::AllocationInfo outAllocInfo;
+
+    vk::Result result = vmaAllocator_.createImage(&c_imageCreateInfo, &c_allocationCreateInfo,
+                                                  &outImage, &outAllocation, &outAllocInfo);
+
+    if (result != vk::Result::eSuccess) {
+      return std::unexpected("VMA failed to create image: " + vk::to_string(result));
+    }
+
+    return VmaImage(vmaAllocator_, outImage, outAllocation, outAllocInfo, imageCreateInfo.format,
+                    imageCreateInfo.extent);
   }
 };

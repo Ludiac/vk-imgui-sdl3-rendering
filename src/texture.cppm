@@ -2,16 +2,17 @@ module;
 
 #include "macros.hpp"
 #include "primitive_types.hpp"
+// #include "vk_mem_alloc.hpp"
 
 export module vulkan_app:texture;
 
 import vulkan_hpp;
 import std;
 import :VulkanDevice;
+import :VMA;
 
 export struct Texture {
-  vk::raii::Image image{nullptr};
-  vk::raii::DeviceMemory memory{nullptr};
+  VmaImage image; // Holds VkImage and VmaAllocation
   vk::raii::ImageView view{nullptr};
   vk::raii::Sampler sampler{nullptr};
 
@@ -254,15 +255,277 @@ void generateMipmaps(VulkanDevice &vulkanDevice, const vk::raii::CommandBuffer &
 }
 } // namespace TextureHelpers
 
-// Creates a Vulkan texture from pixel data or as an uninitialized image.
-export [[nodiscard]] std::expected<Texture, std::string>
-createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize imageSize,
-              vk::Extent3D texExtent, vk::Format texFormat, vk::raii::CommandPool &commandPool,
-              const vk::raii::Queue &transferQueue, bool generateMipmaps = true,
-              vk::ImageUsageFlags additionalImageUsage = {},
-              vk::ImageCreateFlags imageCreateFlags = {}, uint32_t arrayLayers = 1,
-              vk::ImageViewType viewType = vk::ImageViewType::e2D,
-              const vk::SamplerCreateInfo *pCustomSamplerInfo = nullptr) {
+// // Creates a Vulkan texture from pixel data or as an uninitialized image.
+// export [[nodiscard]] std::expected<Texture, std::string>
+// createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize imageSize,
+//               vk::Extent3D texExtent, vk::Format texFormat, vk::raii::CommandPool &commandPool,
+//               const vk::raii::Queue &transferQueue, bool generateMipmaps = true,
+//               vk::ImageUsageFlags additionalImageUsage = {},
+//               vk::ImageCreateFlags imageCreateFlags = {}, uint32_t arrayLayers = 1,
+//               vk::ImageViewType viewType = vk::ImageViewType::e2D,
+//               const vk::SamplerCreateInfo *pCustomSamplerInfo = nullptr) {
+//   if (texExtent.width == 0 || texExtent.height == 0 || texExtent.depth == 0 || arrayLayers == 0)
+//   {
+//     return std::unexpected(
+//         "createTexture: Texture dimensions and arrayLayers must be greater than zero.");
+//   }
+//   if (pixels == nullptr && imageSize > 0) {
+//     return std::unexpected("createTexture: Pixel data is null but imageSize is non-zero.");
+//   }
+//   if (pixels != nullptr && imageSize == 0) {
+//     return std::unexpected("createTexture: Pixel data is provided but imageSize is zero.");
+//   }
+//
+//   Texture textureOut;
+//   textureOut.format = texFormat;
+//   textureOut.extent = texExtent;
+//   textureOut.arrayLayers = arrayLayers;
+//
+//   if (generateMipmaps && texExtent.width > 0 && texExtent.height > 0 && texExtent.depth == 1) {
+//     textureOut.mipLevels =
+//         static_cast<uint32_t>(std::floor(std::log2(std::max(texExtent.width, texExtent.height))))
+//         + 1;
+//   } else {
+//     textureOut.mipLevels = 1;
+//   }
+//
+//   vk::raii::Buffer stagingBuffer{nullptr};
+//   vk::raii::DeviceMemory stagingBufferMemory{nullptr};
+//
+//   if (pixels && imageSize > 0) {
+//     auto bufferResourcesExpected = vulkanDevice.createBuffer(
+//         imageSize, vk::BufferUsageFlagBits::eTransferSrc,
+//         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+//
+//     if (!bufferResourcesExpected) {
+//       return std::unexpected("createTexture: Failed to create staging buffer: " +
+//                              bufferResourcesExpected.error());
+//     }
+//     BufferResources stagingBufferResources = std::move(*bufferResourcesExpected);
+//     stagingBuffer = std::move(stagingBufferResources.buffer);
+//     stagingBufferMemory = std::move(stagingBufferResources.memory);
+//
+//     stagingBuffer.bindMemory(*stagingBufferMemory, 0);
+//
+//     // mapMemory on vk::raii::DeviceMemory returns void* and throws on error if exceptions are
+//     // enabled. With VULKAN_HPP_NO_EXCEPTIONS, it might behave differently (e.g. abort or
+//     specific
+//     // error handling). The vkMapMemory function itself returns VkResult. If your Vulkan-Hpp is
+//     // configured to not throw, you might need a wrapper around mapMemory that checks a result or
+//     // the pointer. For now, proceeding with the direct call, assuming a valid pointer or prior
+//     // failure. A more robust check for `nullptr` after mapMemory is good practice if it can
+//     return
+//     // it on failure without throwing.
+//     void *mappedData = vulkanDevice.logical().mapMemory2KHR({
+//         .memory = *stagingBufferMemory,
+//         .offset = 0,
+//         .size = imageSize,
+//     });
+//     if (!mappedData && imageSize > 0) { // Check if mapMemory failed (returned nullptr)
+//       return std::unexpected("createTexture: Failed to map staging buffer memory (got
+//       nullptr).");
+//     }
+//     std::memcpy(mappedData, pixels, static_cast<size_t>(imageSize));
+//     vulkanDevice.logical().unmapMemory2KHR({
+//         .memory = *stagingBufferMemory,
+//     });
+//   }
+//
+//   vk::ImageCreateInfo imageInfo{.flags = imageCreateFlags,
+//                                 .imageType =
+//                                     (texExtent.depth > 1 && viewType !=
+//                                     vk::ImageViewType::e2DArray)
+//                                         ? vk::ImageType::e3D
+//                                         : vk::ImageType::e2D,
+//                                 .format = textureOut.format,
+//                                 .extent = textureOut.extent,
+//                                 .mipLevels = textureOut.mipLevels,
+//                                 .arrayLayers = textureOut.arrayLayers,
+//                                 .samples = vk::SampleCountFlagBits::e1,
+//                                 .tiling = vk::ImageTiling::eOptimal,
+//                                 .usage = vk::ImageUsageFlagBits::eSampled | additionalImageUsage,
+//                                 .sharingMode = vk::SharingMode::eExclusive,
+//                                 .initialLayout = vk::ImageLayout::eUndefined};
+//   if (pixels && imageSize > 0) {
+//     imageInfo.usage |= vk::ImageUsageFlagBits::eTransferDst;
+//   }
+//   if (generateMipmaps && textureOut.mipLevels > 1) {
+//     imageInfo.usage |= vk::ImageUsageFlagBits::eTransferSrc;
+//   }
+//
+//   auto imageResultValue = vulkanDevice.logical().createImage(imageInfo);
+//   if (!imageResultValue) {
+//     return std::unexpected("createTexture: Failed to create vk::Image: " +
+//                            vk::to_string(imageResultValue.error()));
+//   }
+//   textureOut.image = std::move(imageResultValue.value());
+//
+//   vk::MemoryRequirements memRequirements = textureOut.image.getMemoryRequirements();
+//   auto memoryTypeIndexExpected =
+//       TextureHelpers::findMemoryType(vulkanDevice.physical(), memRequirements.memoryTypeBits,
+//                                      vk::MemoryPropertyFlagBits::eDeviceLocal);
+//   if (!memoryTypeIndexExpected) {
+//     return std::unexpected("createTexture: " + memoryTypeIndexExpected.error());
+//   }
+//
+//   vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size,
+//                                    .memoryTypeIndex = *memoryTypeIndexExpected};
+//   auto memoryResultValue = vulkanDevice.logical().allocateMemory(allocInfo);
+//   if (!memoryResultValue) {
+//     return std::unexpected("createTexture: Failed to allocate image memory: " +
+//                            vk::to_string(memoryResultValue.error()));
+//   }
+//   textureOut.memory = std::move(memoryResultValue.value());
+//
+//   textureOut.image.bindMemory(*textureOut.memory, 0);
+//
+//   auto commandBufferExpected =
+//       TextureHelpers::beginSingleTimeCommands(vulkanDevice.logical(), commandPool);
+//   if (!commandBufferExpected) {
+//     return std::unexpected("createTexture: " + commandBufferExpected.error());
+//   }
+//   vk::raii::CommandBuffer commandBuffer = std::move(*commandBufferExpected);
+//
+//   vk::ImageSubresourceRange baseSubresourceRange{.aspectMask = vk::ImageAspectFlagBits::eColor,
+//                                                  .baseMipLevel = 0,
+//                                                  .levelCount = textureOut.mipLevels,
+//                                                  .baseArrayLayer = 0,
+//                                                  .layerCount = textureOut.arrayLayers};
+//   if (additionalImageUsage & vk::ImageUsageFlagBits::eDepthStencilAttachment ||
+//       texFormat == vk::Format::eD32Sfloat || texFormat == vk::Format::eD16Unorm ||
+//       texFormat == vk::Format::eD32SfloatS8Uint || texFormat == vk::Format::eD24UnormS8Uint ||
+//       texFormat == vk::Format::eD16UnormS8Uint) {
+//     baseSubresourceRange.aspectMask = vk::ImageAspectFlagBits::eDepth;
+//     if (texFormat == vk::Format::eD32SfloatS8Uint || texFormat == vk::Format::eD24UnormS8Uint ||
+//         texFormat == vk::Format::eD16UnormS8Uint) {
+//       baseSubresourceRange.aspectMask |= vk::ImageAspectFlagBits::eStencil;
+//     }
+//   }
+//
+//   if (pixels && imageSize > 0) {
+//     TextureHelpers::transitionImageLayout(
+//         commandBuffer, *textureOut.image, textureOut.format, vk::ImageLayout::eUndefined,
+//         vk::ImageLayout::eTransferDstOptimal, baseSubresourceRange);
+//
+//     vk::ImageSubresourceLayers copySubresourceLayers{.aspectMask =
+//     baseSubresourceRange.aspectMask,
+//                                                      .mipLevel = 0,
+//                                                      .baseArrayLayer = 0,
+//                                                      .layerCount = textureOut.arrayLayers};
+//     TextureHelpers::copyBufferToImage(commandBuffer, *stagingBuffer, *textureOut.image,
+//     texExtent,
+//                                       copySubresourceLayers);
+//
+//     if (generateMipmaps && textureOut.mipLevels > 1) {
+//       TextureHelpers::generateMipmaps(vulkanDevice, commandBuffer, *textureOut.image,
+//                                       vk::Extent2D{texExtent.width, texExtent.height},
+//                                       textureOut.mipLevels, textureOut.format,
+//                                       textureOut.arrayLayers);
+//     } else {
+//       TextureHelpers::transitionImageLayout(
+//           commandBuffer, *textureOut.image, textureOut.format,
+//           vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal,
+//           baseSubresourceRange);
+//     }
+//   } else {
+//     vk::ImageLayout targetLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+//     if (additionalImageUsage & vk::ImageUsageFlagBits::eColorAttachment) {
+//       targetLayout = vk::ImageLayout::eColorAttachmentOptimal;
+//     } else if (additionalImageUsage & vk::ImageUsageFlagBits::eDepthStencilAttachment) {
+//       targetLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+//     } else if (additionalImageUsage & vk::ImageUsageFlagBits::eStorage) {
+//       targetLayout = vk::ImageLayout::eGeneral;
+//     }
+//     TextureHelpers::transitionImageLayout(commandBuffer, *textureOut.image, textureOut.format,
+//                                           vk::ImageLayout::eUndefined, targetLayout,
+//                                           baseSubresourceRange);
+//   }
+//
+//   auto endCommandsExpected = TextureHelpers::endSingleTimeCommands(
+//       vulkanDevice.logical(), std::move(commandBuffer), transferQueue);
+//   if (!endCommandsExpected) {
+//     // Staging buffer and its memory are RAII and will be cleaned up.
+//     // Texture image and memory are also RAII and will be cleaned up if this function returns an
+//     // error.
+//     return std::unexpected("createTexture: " + endCommandsExpected.error());
+//   }
+//
+//   vk::ImageViewCreateInfo viewInfo{.image = *textureOut.image,
+//                                    .viewType = viewType,
+//                                    .format = textureOut.format,
+//                                    .components = {.r = vk::ComponentSwizzle::eIdentity,
+//                                                   .g = vk::ComponentSwizzle::eIdentity,
+//                                                   .b = vk::ComponentSwizzle::eIdentity,
+//                                                   .a = vk::ComponentSwizzle::eIdentity},
+//                                    .subresourceRange = baseSubresourceRange};
+//
+//   auto viewResultValue = vulkanDevice.logical().createImageView(viewInfo);
+//   if (!viewResultValue) {
+//     return std::unexpected("createTexture: Failed to create image view: " +
+//                            vk::to_string(viewResultValue.error()));
+//   }
+//   textureOut.view = std::move(viewResultValue.value());
+//
+//   if (pCustomSamplerInfo) {
+//     auto samplerResultValue = vulkanDevice.logical().createSampler(*pCustomSamplerInfo);
+//     if (!samplerResultValue) {
+//       return std::unexpected("createTexture: Failed to create custom sampler: " +
+//                              vk::to_string(samplerResultValue.error()));
+//     }
+//     textureOut.sampler = std::move(samplerResultValue.value());
+//   } else {
+//     vk::SamplerCreateInfo samplerInfo{
+//         .magFilter = vk::Filter::eLinear,
+//         .minFilter = vk::Filter::eLinear,
+//         .mipmapMode = vk::SamplerMipmapMode::eLinear,
+//         .addressModeU = vk::SamplerAddressMode::eRepeat,
+//         .addressModeV = vk::SamplerAddressMode::eRepeat,
+//         .addressModeW = vk::SamplerAddressMode::eRepeat,
+//         .mipLodBias = 0.0f,
+//         .anisotropyEnable = vulkanDevice.physical().getFeatures().samplerAnisotropy
+//                                 ? true
+//                                 : false, // Use true/false
+//         .maxAnisotropy = vulkanDevice.physical().getFeatures().samplerAnisotropy
+//                              ?
+//                              vulkanDevice.physical().getProperties().limits.maxSamplerAnisotropy
+//                              : 1.0f,
+//         .compareEnable = false, // Use true/false
+//         .compareOp = vk::CompareOp::eAlways,
+//         .minLod = 0.0f,
+//         .maxLod = static_cast<float>(textureOut.mipLevels),
+//         .borderColor = vk::BorderColor::eFloatOpaqueBlack,
+//         .unnormalizedCoordinates = false // Use true/false
+//     };
+//     auto samplerResultValue = vulkanDevice.logical().createSampler(samplerInfo);
+//     if (!samplerResultValue) {
+//       return std::unexpected("createTexture: Failed to create default sampler: " +
+//                              vk::to_string(samplerResultValue.error()));
+//     }
+//     textureOut.sampler = std::move(samplerResultValue.value());
+//   }
+//
+//   return textureOut;
+// }
+
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+export std::expected<Texture, std::string> createTexture3(
+    VulkanDevice &vulkanDevice, // Note: changed from device_ to vulkanDevice
+    const void *pixels, vk::DeviceSize imageSize, vk::Extent3D texExtent, vk::Format texFormat,
+    // CommandPool and TransferQueue are still needed for commands, not for memory allocation itself
+    vk::raii::CommandPool &commandPool, const vk::raii::Queue &transferQueue,
+    bool generateMipmaps = true, vk::ImageUsageFlags additionalImageUsage = {},
+    vk::ImageCreateFlags imageCreateFlags = {}, uint32_t arrayLayers = 1,
+    vk::ImageViewType viewType = vk::ImageViewType::e2D,
+    const vk::SamplerCreateInfo *pCustomSamplerInfo = nullptr) {
   if (texExtent.width == 0 || texExtent.height == 0 || texExtent.depth == 0 || arrayLayers == 0) {
     return std::unexpected(
         "createTexture: Texture dimensions and arrayLayers must be greater than zero.");
@@ -274,12 +537,10 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
     return std::unexpected("createTexture: Pixel data is provided but imageSize is zero.");
   }
 
-  Texture textureOut;
-  textureOut.format = texFormat;
-  textureOut.extent = texExtent;
+  Texture textureOut; // Resulting texture
   textureOut.arrayLayers = arrayLayers;
 
-  if (generateMipmaps && texExtent.width > 0 && texExtent.height > 0 && texExtent.depth == 1) {
+  if (generateMipmaps && texExtent.width > 0 && texExtent.height > 0) {
     textureOut.mipLevels =
         static_cast<uint32_t>(std::floor(std::log2(std::max(texExtent.width, texExtent.height)))) +
         1;
@@ -287,91 +548,57 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
     textureOut.mipLevels = 1;
   }
 
-  vk::raii::Buffer stagingBuffer{nullptr};
-  vk::raii::DeviceMemory stagingBufferMemory{nullptr};
+  VmaBuffer stagingVmaBuffer;
 
   if (pixels && imageSize > 0) {
-    auto bufferResourcesExpected = vulkanDevice.createBuffer(
-        imageSize, vk::BufferUsageFlagBits::eTransferSrc,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    vk::BufferCreateInfo stagingBufferInfo{.size = imageSize,
+                                           .usage = vk::BufferUsageFlagBits::eTransferSrc};
+    vma::AllocationCreateInfo stagingAllocInfo{
+        .flags = vma::AllocationCreateFlagBits::eHostAccessSequentialWrite |
+                 vma::AllocationCreateFlagBits::eMapped,
+        .usage = vma::MemoryUsage::eAutoPreferHost // Good for CPU-written staging buffers
+    };
+    auto stagingResult = vulkanDevice.createBufferVMA(stagingBufferInfo, stagingAllocInfo);
+    if (!stagingResult)
+      return std::unexpected("createTexture: Staging buffer creation failed: " +
+                             stagingResult.error());
+    stagingVmaBuffer = std::move(stagingResult.value());
 
-    if (!bufferResourcesExpected) {
-      return std::unexpected("createTexture: Failed to create staging buffer: " +
-                             bufferResourcesExpected.error());
-    }
-    BufferResources stagingBufferResources = std::move(*bufferResourcesExpected);
-    stagingBuffer = std::move(stagingBufferResources.buffer);
-    stagingBufferMemory = std::move(stagingBufferResources.memory);
-
-    stagingBuffer.bindMemory(*stagingBufferMemory, 0);
-
-    // mapMemory on vk::raii::DeviceMemory returns void* and throws on error if exceptions are
-    // enabled. With VULKAN_HPP_NO_EXCEPTIONS, it might behave differently (e.g. abort or specific
-    // error handling). The vkMapMemory function itself returns VkResult. If your Vulkan-Hpp is
-    // configured to not throw, you might need a wrapper around mapMemory that checks a result or
-    // the pointer. For now, proceeding with the direct call, assuming a valid pointer or prior
-    // failure. A more robust check for `nullptr` after mapMemory is good practice if it can return
-    // it on failure without throwing.
-    void *mappedData = vulkanDevice.logical().mapMemory2KHR({
-        .memory = *stagingBufferMemory,
-        .offset = 0,
-        .size = imageSize,
-    });
-    if (!mappedData && imageSize > 0) { // Check if mapMemory failed (returned nullptr)
-      return std::unexpected("createTexture: Failed to map staging buffer memory (got nullptr).");
-    }
-    std::memcpy(mappedData, pixels, static_cast<size_t>(imageSize));
-    vulkanDevice.logical().unmapMemory2KHR({
-        .memory = *stagingBufferMemory,
-    });
+    if (!stagingVmaBuffer.getMappedData())
+      return std::unexpected("createTexture: Staging buffer not mapped.");
+    std::memcpy(stagingVmaBuffer.getMappedData(), pixels, static_cast<size_t>(imageSize));
+    // No explicit unmap if persistently mapped. Flush if not host coherent.
+    // vulkanDevice.getAllocator().flushAllocation(stagingVmaBuffer.getAllocation(), 0, imageSize);
   }
 
-  vk::ImageCreateInfo imageInfo{.flags = imageCreateFlags,
-                                .imageType =
-                                    (texExtent.depth > 1 && viewType != vk::ImageViewType::e2DArray)
-                                        ? vk::ImageType::e3D
-                                        : vk::ImageType::e2D,
-                                .format = textureOut.format,
-                                .extent = textureOut.extent,
-                                .mipLevels = textureOut.mipLevels,
-                                .arrayLayers = textureOut.arrayLayers,
-                                .samples = vk::SampleCountFlagBits::e1,
-                                .tiling = vk::ImageTiling::eOptimal,
-                                .usage = vk::ImageUsageFlagBits::eSampled | additionalImageUsage,
-                                .sharingMode = vk::SharingMode::eExclusive,
-                                .initialLayout = vk::ImageLayout::eUndefined};
-  if (pixels && imageSize > 0) {
-    imageInfo.usage |= vk::ImageUsageFlagBits::eTransferDst;
-  }
+  vk::ImageCreateInfo imageCi{.flags = imageCreateFlags,
+                              .imageType =
+                                  (texExtent.depth > 1 && viewType != vk::ImageViewType::e2DArray)
+                                      ? vk::ImageType::e3D
+                                      : vk::ImageType::e2D,
+                              .format = texFormat,
+                              .extent = texExtent,
+                              .mipLevels = textureOut.mipLevels,
+                              .arrayLayers = textureOut.arrayLayers,
+                              .samples = vk::SampleCountFlagBits::e1,
+                              .tiling = vk::ImageTiling::eOptimal,
+                              .usage = vk::ImageUsageFlagBits::eSampled |
+                                       vk::ImageUsageFlagBits::eTransferDst | additionalImageUsage,
+                              .initialLayout = vk::ImageLayout::eUndefined};
   if (generateMipmaps && textureOut.mipLevels > 1) {
-    imageInfo.usage |= vk::ImageUsageFlagBits::eTransferSrc;
+    imageCi.usage |= vk::ImageUsageFlagBits::eTransferSrc;
   }
 
-  auto imageResultValue = vulkanDevice.logical().createImage(imageInfo);
-  if (!imageResultValue) {
-    return std::unexpected("createTexture: Failed to create vk::Image: " +
-                           vk::to_string(imageResultValue.error()));
-  }
-  textureOut.image = std::move(imageResultValue.value());
+  vma::AllocationCreateInfo imageAllocInfo{
+      .usage = vma::MemoryUsage::eAutoPreferDevice // Images typically device local
+      // .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT (for render targets or very large
+      // textures)
+  };
 
-  vk::MemoryRequirements memRequirements = textureOut.image.getMemoryRequirements();
-  auto memoryTypeIndexExpected =
-      TextureHelpers::findMemoryType(vulkanDevice.physical(), memRequirements.memoryTypeBits,
-                                     vk::MemoryPropertyFlagBits::eDeviceLocal);
-  if (!memoryTypeIndexExpected) {
-    return std::unexpected("createTexture: " + memoryTypeIndexExpected.error());
-  }
-
-  vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size,
-                                   .memoryTypeIndex = *memoryTypeIndexExpected};
-  auto memoryResultValue = vulkanDevice.logical().allocateMemory(allocInfo);
-  if (!memoryResultValue) {
-    return std::unexpected("createTexture: Failed to allocate image memory: " +
-                           vk::to_string(memoryResultValue.error()));
-  }
-  textureOut.memory = std::move(memoryResultValue.value());
-
-  textureOut.image.bindMemory(*textureOut.memory, 0);
+  auto vmaImageResult = vulkanDevice.createImageVMA(imageCi, imageAllocInfo);
+  if (!vmaImageResult)
+    return std::unexpected("createTexture: VMA image creation failed: " + vmaImageResult.error());
+  textureOut.image = std::move(vmaImageResult.value());
 
   auto commandBufferExpected =
       TextureHelpers::beginSingleTimeCommands(vulkanDevice.logical(), commandPool);
@@ -398,25 +625,26 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
 
   if (pixels && imageSize > 0) {
     TextureHelpers::transitionImageLayout(
-        commandBuffer, *textureOut.image, textureOut.format, vk::ImageLayout::eUndefined,
+        commandBuffer, textureOut.image.get(), textureOut.format, vk::ImageLayout::eUndefined,
         vk::ImageLayout::eTransferDstOptimal, baseSubresourceRange);
 
     vk::ImageSubresourceLayers copySubresourceLayers{.aspectMask = baseSubresourceRange.aspectMask,
                                                      .mipLevel = 0,
                                                      .baseArrayLayer = 0,
                                                      .layerCount = textureOut.arrayLayers};
-    TextureHelpers::copyBufferToImage(commandBuffer, *stagingBuffer, *textureOut.image, texExtent,
-                                      copySubresourceLayers);
+    TextureHelpers::copyBufferToImage(commandBuffer, stagingVmaBuffer.get(), textureOut.image.get(),
+                                      texExtent, copySubresourceLayers);
 
     if (generateMipmaps && textureOut.mipLevels > 1) {
-      TextureHelpers::generateMipmaps(vulkanDevice, commandBuffer, *textureOut.image,
+      TextureHelpers::generateMipmaps(vulkanDevice, commandBuffer, textureOut.image.get(),
                                       vk::Extent2D{texExtent.width, texExtent.height},
                                       textureOut.mipLevels, textureOut.format,
                                       textureOut.arrayLayers);
     } else {
-      TextureHelpers::transitionImageLayout(
-          commandBuffer, *textureOut.image, textureOut.format, vk::ImageLayout::eTransferDstOptimal,
-          vk::ImageLayout::eShaderReadOnlyOptimal, baseSubresourceRange);
+      TextureHelpers::transitionImageLayout(commandBuffer, textureOut.image.get(),
+                                            textureOut.format, vk::ImageLayout::eTransferDstOptimal,
+                                            vk::ImageLayout::eShaderReadOnlyOptimal,
+                                            baseSubresourceRange);
     }
   } else {
     vk::ImageLayout targetLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
@@ -427,7 +655,7 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
     } else if (additionalImageUsage & vk::ImageUsageFlagBits::eStorage) {
       targetLayout = vk::ImageLayout::eGeneral;
     }
-    TextureHelpers::transitionImageLayout(commandBuffer, *textureOut.image, textureOut.format,
+    TextureHelpers::transitionImageLayout(commandBuffer, textureOut.image.get(), textureOut.format,
                                           vk::ImageLayout::eUndefined, targetLayout,
                                           baseSubresourceRange);
   }
@@ -440,22 +668,29 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
     // error.
     return std::unexpected("createTexture: " + endCommandsExpected.error());
   }
+  // --- Command Buffer for layout transitions and copy ---
+  // This part remains similar, using commandPool and transferQueue
+  // It operates on textureOut.vmaImage.get() which is the VkImage handle.
+  // ... (beginSingleTimeCommands, transitionImageLayout, copyBufferToImage, generateMipmaps) ...
+  // Example: TextureHelpers::copyBufferToImage(commandBuffer, stagingVmaBuffer.get(),
+  // textureOut.vmaImage.get(), ...);
 
-  vk::ImageViewCreateInfo viewInfo{.image = *textureOut.image,
-                                   .viewType = viewType,
-                                   .format = textureOut.format,
-                                   .components = {.r = vk::ComponentSwizzle::eIdentity,
-                                                  .g = vk::ComponentSwizzle::eIdentity,
-                                                  .b = vk::ComponentSwizzle::eIdentity,
-                                                  .a = vk::ComponentSwizzle::eIdentity},
-                                   .subresourceRange = baseSubresourceRange};
-
-  auto viewResultValue = vulkanDevice.logical().createImageView(viewInfo);
-  if (!viewResultValue) {
-    return std::unexpected("createTexture: Failed to create image view: " +
-                           vk::to_string(viewResultValue.error()));
-  }
-  textureOut.view = std::move(viewResultValue.value());
+  // Create ImageView (uses textureOut.vmaImage.get())
+  vk::ImageViewCreateInfo viewInfo{
+      .image = textureOut.image.get(), // Use VkImage from VmaImage
+      .viewType = viewType,
+      .format = textureOut.image.getFormat(), // Use format from VmaImage
+      // ... rest of viewInfo setup ...
+      .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                           .baseMipLevel = 0,
+                           .levelCount = textureOut.mipLevels,
+                           .baseArrayLayer = 0,
+                           .layerCount = textureOut.arrayLayers}};
+  auto viewResult = vulkanDevice.logical().createImageView(viewInfo); // Using Unique for RAII
+  if (!viewResult)
+    return std::unexpected("createTexture: Failed to create ImageView: " +
+                           vk::to_string(viewResult.error()));
+  textureOut.view = std::move(*viewResult);
 
   if (pCustomSamplerInfo) {
     auto samplerResultValue = vulkanDevice.logical().createSampler(*pCustomSamplerInfo);
@@ -526,8 +761,9 @@ createDefaultTexture(VulkanDevice &vulkanDevice, vk::raii::CommandPool &commandP
 
   vk::DeviceSize imageSize = pixels.size();
 
-  return createTexture(vulkanDevice, pixels.data(), imageSize, extent, format, commandPool,
-                       transferQueue, false, {}, {}, 1, vk::ImageViewType::e2D, pCustomSamplerInfo);
+  return createTexture3(vulkanDevice, pixels.data(), imageSize, extent, format, commandPool,
+                        transferQueue, false, {}, {}, 1, vk::ImageViewType::e2D,
+                        pCustomSamplerInfo);
 }
 
 export [[nodiscard]] std::expected<Texture, std::string>
@@ -576,6 +812,7 @@ createTestPatternTexture(VulkanDevice &vulkanDevice, vk::raii::CommandPool &comm
 
   vk::DeviceSize imageSize = pixels.size();
 
-  return createTexture(vulkanDevice, pixels.data(), imageSize, extent, format, commandPool,
-                       transferQueue, false, {}, {}, 1, vk::ImageViewType::e2D, pCustomSamplerInfo);
+  return createTexture3(vulkanDevice, pixels.data(), imageSize, extent, format, commandPool,
+                        transferQueue, false, {}, {}, 1, vk::ImageViewType::e2D,
+                        pCustomSamplerInfo);
 }
