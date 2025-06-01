@@ -7,6 +7,7 @@ module;
 export module vulkan_app:VulkanWindow;
 
 import vulkan_hpp;
+import :VMA;
 import :VulkanDevice;
 import std;
 
@@ -41,8 +42,7 @@ struct Window {
   vk::raii::SwapchainKHR Swapchain{nullptr};
   vk::raii::RenderPass RenderPass{nullptr};
 
-  vk::raii::Image depthImage{nullptr};
-  vk::raii::DeviceMemory depthImageMemory{nullptr};
+  VmaImage depthVmaImage;
   vk::raii::ImageView depthImageView{nullptr};
   vk::Format depthFormat{}; // To store the chosen depth format
 
@@ -55,7 +55,6 @@ struct Window {
 
 // Add these helper functions (if not already present) in VulkanWindow.cppm
 // or a module imported by VulkanWindow.cppm
-
 vk::Format findSupportedFormat(const vk::raii::PhysicalDevice &physicalDevice,
                                const std::vector<vk::Format> &candidates, vk::ImageTiling tiling,
                                vk::FormatFeatureFlags features) {
@@ -142,7 +141,7 @@ createWindowCommandBuffers(const VulkanDevice &device, Window &wd) {
 
     if (auto commandPool = device.logical().createCommandPool({
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-            .queueFamilyIndex = device.queueFamily,
+            .queueFamilyIndex = device.queueFamily_,
         });
         commandPool) {
       fd.CommandPool = std::move(*commandPool);
@@ -244,99 +243,111 @@ void transitionImageLayout(const vk::raii::Device &device,
   commandBuffer.pipelineBarrier(sourceStage, destinationStage, {}, nullptr, nullptr, barrier);
 }
 
-[[nodiscard]] std::expected<void, std::string>
-createDepthResources(const VulkanDevice &vulkan_device, Window &wd, vk::Extent2D extent) {
+// In VulkanWindow.cppm or wherever Window struct and createDepthResources are
+// Make sure Window struct stores VmaImage for depth:
+/*
+export module vulkan_app:VulkanWindow;
+import :VMA; // For VmaImage
+// ...
+export struct Window {
+    // ... other members ...
+    VmaImage depthVmaImage; // Replaces depthImage and depthImageMemory
+    vk::raii::ImageView depthImageView{nullptr}; // ImageView is still separate
+    vk::Format depthFormat = vk::Format::eUndefined;
+    // ...
+};
+*/
+
+[[nodiscard]] std::expected<void, std::string> createDepthResources( // Renamed for clarity
+    VulkanDevice &vulkan_device, Window &wd, vk::Extent2D extent) {
   wd.depthFormat = findDepthFormat(vulkan_device.physical());
-
-  vk::ImageCreateInfo imageInfo{.imageType = vk::ImageType::e2D,
-                                .format = wd.depthFormat,
-                                .extent = vk::Extent3D{extent.width, extent.height, 1},
-                                .mipLevels = 1,
-                                .arrayLayers = 1,
-                                .samples = vk::SampleCountFlagBits::e1,
-                                .tiling = vk::ImageTiling::eOptimal,
-                                .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
-                                .sharingMode = vk::SharingMode::eExclusive,
-                                .initialLayout = vk::ImageLayout::eUndefined};
-
-  auto imageResult = vulkan_device.logical().createImage(imageInfo);
-  if (!imageResult) {
-    return std::unexpected("Failed to create depth image: " + vk::to_string(imageResult.error()));
+  if (wd.depthFormat == vk::Format::eUndefined) {
+    return std::unexpected("Failed to find suitable depth format.");
   }
-  wd.depthImage = std::move(imageResult.value());
 
-  vk::MemoryRequirements memRequirements = wd.depthImage.getMemoryRequirements();
-  vk::MemoryAllocateInfo allocInfo{
-      .allocationSize = memRequirements.size,
-      .memoryTypeIndex = findMemoryType(vulkan_device.physical(), memRequirements.memoryTypeBits,
-                                        vk::MemoryPropertyFlagBits::eDeviceLocal)};
-
-  auto memoryResult = vulkan_device.logical().allocateMemory(allocInfo);
-  if (!memoryResult) {
-    // wd.depthImage will be cleaned up by RAII if we return error here
-    return std::unexpected("Failed to allocate depth image memory: " +
-                           vk::to_string(memoryResult.error()));
-  }
-  wd.depthImageMemory = std::move(memoryResult.value());
-
-  wd.depthImage.bindMemory(*wd.depthImageMemory, 0);
-
-  vk::ImageViewCreateInfo viewInfo{
-      .image = *wd.depthImage,
-      .viewType = vk::ImageViewType::e2D,
+  vk::ImageCreateInfo imageCi{
+      .imageType = vk::ImageType::e2D,
       .format = wd.depthFormat,
-      .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eDepth,
-                           // |        vk::ImageAspectFlagBits::eStencil, // Adjust if stencil
-                           // component is present and used
-                           .baseMipLevel = 0,
-                           .levelCount = 1,
-                           .baseArrayLayer = 0,
-                           .layerCount = 1}};
+      .extent = vk::Extent3D{extent.width, extent.height, 1},
+      .mipLevels = 1,
+      .arrayLayers = 1,
+      .samples = vk::SampleCountFlagBits::e1,
+      .tiling = vk::ImageTiling::eOptimal,
+      .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+      .sharingMode = vk::SharingMode::eExclusive,
+      .initialLayout =
+          vk::ImageLayout::eUndefined // VMA doesn't set initial layout for optimal images
+  };
+
+  vma::AllocationCreateInfo imageAllocInfo{
+      .usage = vma::MemoryUsage::eAutoPreferDevice // Depth buffers are best in device local memory
+      // No eMapped flag needed as CPU doesn't typically access depth buffer directly
+  };
+
+  auto vmaImageResult = vulkan_device.createImageVMA(imageCi, imageAllocInfo);
+  if (!vmaImageResult) {
+    return std::unexpected("VMA depth image creation failed: " + vmaImageResult.error());
+  }
+  wd.depthVmaImage = std::move(vmaImageResult.value()); // Store VmaImage
+
+  // --- Create Depth Image View ---
+  vk::ImageSubresourceRange depthSubresourceRange{.aspectMask = vk::ImageAspectFlagBits::eDepth,
+                                                  .baseMipLevel = 0,
+                                                  .levelCount = 1,
+                                                  .baseArrayLayer = 0,
+                                                  .layerCount = 1};
   if (wd.depthFormat == vk::Format::eD32SfloatS8Uint ||
       wd.depthFormat == vk::Format::eD24UnormS8Uint) {
-    viewInfo.subresourceRange.aspectMask |= vk::ImageAspectFlagBits::eStencil;
+    depthSubresourceRange.aspectMask |= vk::ImageAspectFlagBits::eStencil;
   }
 
+  vk::ImageViewCreateInfo viewInfo{
+      .image = wd.depthVmaImage.get(), // Get VkImage handle from VmaImage
+      .viewType = vk::ImageViewType::e2D,
+      .format = wd.depthVmaImage.getFormat(), // Get format from VmaImage
+      .subresourceRange = depthSubresourceRange};
+
+  // If wd.depthImageView is vk::raii::ImageView, create it as unique
+  if (*wd.depthImageView)
+    wd.depthImageView.clear(); // Clear existing if any
   auto viewResult = vulkan_device.logical().createImageView(viewInfo);
   if (!viewResult) {
-    return std::unexpected("Failed to create depth image view: " +
+    return std::unexpected("Failed to create depth image view (VMA): " +
                            vk::to_string(viewResult.error()));
   }
   wd.depthImageView = std::move(viewResult.value());
 
-  // Transition depth image to be ready for depth attachment
-  // This requires a command buffer. You might need a temporary one here,
-  // or ensure this function is called where one is available.
-  // For simplicity, assuming a way to get a one-time command buffer.
-  // This part needs to be integrated with your command buffer management.
-  // If your VulkanDevice has a helper for single-time commands, use it.
-  // Example placeholder:
-  auto tempCmdPoolResult =
-      vulkan_device.logical().createCommandPool({.queueFamilyIndex = vulkan_device.queueFamily});
-  if (!tempCmdPoolResult)
-    return std::unexpected("Failed to create temp cmd pool for depth layout transition");
-  vk::raii::CommandPool tempCmdPool = std::move(tempCmdPoolResult.value());
+  // --- Transition Image Layout using VulkanDevice helpers ---
+  auto cmdBufferExpected = vulkan_device.beginSingleTimeCommands();
+  if (!cmdBufferExpected) {
+    return std::unexpected("VMA Depth: Failed to begin single-time commands: " +
+                           cmdBufferExpected.error());
+  }
+  vk::raii::CommandBuffer cmdBuffer = std::move(cmdBufferExpected.value());
 
-  auto tempCmdBufferResult =
-      vulkan_device.logical().allocateCommandBuffers({.commandPool = *tempCmdPool,
-                                                      .level = vk::CommandBufferLevel::ePrimary,
-                                                      .commandBufferCount = 1});
-  if (!tempCmdBufferResult)
-    return std::unexpected("Failed to allocate temp cmd buffer for depth layout transition");
-  vk::raii::CommandBuffer tempCmdBuffer = std::move(tempCmdBufferResult.value()[0]);
+  // Record barrier for layout transition
+  vk::ImageMemoryBarrier barrier{.srcAccessMask = vk::AccessFlagBits::eNone,
+                                 .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentRead |
+                                                  vk::AccessFlagBits::eDepthStencilAttachmentWrite,
+                                 .oldLayout = vk::ImageLayout::eUndefined,
+                                 .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                                 .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+                                 .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+                                 .image =
+                                     wd.depthVmaImage.get(), // Use VkImage handle from VmaImage
+                                 .subresourceRange = depthSubresourceRange};
+  cmdBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                            vk::PipelineStageFlagBits::eEarlyFragmentTests |
+                                vk::PipelineStageFlagBits::eLateFragmentTests,
+                            {}, nullptr, nullptr, {barrier});
 
-  tempCmdBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
-  transitionImageLayout(vulkan_device.logical(), tempCmdBuffer, *wd.depthImage, wd.depthFormat,
-                        vk::ImageLayout::eUndefined,
-                        vk::ImageLayout::eDepthStencilAttachmentOptimal);
-  tempCmdBuffer.end();
+  auto endCmdResult = vulkan_device.endSingleTimeCommands(std::move(cmdBuffer));
+  if (!endCmdResult) {
+    return std::unexpected("VMA Depth: Failed to end single-time commands: " +
+                           endCmdResult.error());
+  }
 
-  vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*tempCmdBuffer};
-  vulkan_device.queue.submit(submitInfo, nullptr); // Use a fence for proper synchronization
-  vulkan_device.queue.waitIdle();                  // Simplistic wait
-  // The above transition is crucial. You need to adapt it to your command execution flow.
-  // A common pattern is to have a utility function in VulkanDevice to submit single time commands.
-
+  std::println("Depth resources (VMA) created successfully.");
   return {};
 }
 
@@ -402,7 +413,7 @@ createFramebuffers(const vk::raii::Device &device,
   return {};
 }
 
-[[nodiscard]] std::expected<void, std::string> createWindowSwapChain(const VulkanDevice &device,
+[[nodiscard]] std::expected<void, std::string> createWindowSwapChain(VulkanDevice &device,
                                                                      Window &wd_old,
                                                                      vk::Extent2D extent,
                                                                      uint32_t min_image_count) {
@@ -495,8 +506,9 @@ createFramebuffers(const vk::raii::Device &device,
                                                      // pass (unless for post-processing)
         .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
         .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
-        .initialLayout = vk::ImageLayout::eUndefined, // Or eDepthStencilAttachmentOptimal if
-                                                      // transitioned already
+        .initialLayout =
+            vk::ImageLayout::eDepthStencilAttachmentOptimal, // Or eDepthStencilAttachmentOptimal if
+                                                             // transitioned already
         .finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal};
 
     std::array<vk::AttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
@@ -559,8 +571,8 @@ createFramebuffers(const vk::raii::Device &device,
   return {};
 }
 
-void createOrResizeWindow(const vk::raii::Instance &instance, const VulkanDevice &device,
-                          Window &wd, vk::Extent2D extent, uint32_t min_image_count) {
+void createOrResizeWindow(const vk::raii::Instance &instance, VulkanDevice &device, Window &wd,
+                          vk::Extent2D extent, uint32_t min_image_count) {
   EXPECTED_VOID(createWindowSwapChain(device, wd, extent, min_image_count));
   EXPECTED_VOID(createWindowCommandBuffers(device, wd));
 }

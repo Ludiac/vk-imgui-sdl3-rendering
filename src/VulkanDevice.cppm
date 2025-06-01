@@ -18,17 +18,18 @@ export struct BufferResources {
 
 export struct VulkanDevice {
 private:
-  vk::raii::PhysicalDevice physicalDevice{nullptr};
-  vk::raii::Device device{nullptr};
-  const vk::raii::Instance &instance;
+  vk::raii::PhysicalDevice physicalDevice_{nullptr};
+  vk::raii::Device device_{nullptr};
+  const vk::raii::Instance &instance_;
   vma::Allocator vmaAllocator_;
+  vk::raii::CommandPool transientCommandPool_{nullptr};
 
 public:
-  u32 queueFamily = (u32)-1;
-  vk::raii::Queue queue{nullptr};
-  vk::raii::DescriptorPool descriptorPool{nullptr};
+  u32 queueFamily_ = (u32)-1;
+  vk::raii::Queue queue_{nullptr};
+  vk::raii::DescriptorPool descriptorPool_{nullptr};
 
-  VulkanDevice(const vk::raii::Instance &instance) : instance(instance) {}
+  VulkanDevice(const vk::raii::Instance &instance) : instance_(instance) {}
 
 private:
   u32 selectQueueFamilyIndex(const vk::raii::PhysicalDevice &physical_device) {
@@ -44,7 +45,7 @@ private:
   }
 
   uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
-    auto memProperties = physicalDevice.getMemoryProperties();
+    auto memProperties = physicalDevice_.getMemoryProperties();
 
     for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
       if ((typeFilter & (1 << i)) &&
@@ -58,27 +59,27 @@ private:
   }
 
 public:
-  const vk::raii::Device &logical() const { return device; }
-  const vk::raii::PhysicalDevice &physical() const { return physicalDevice; }
+  const vk::raii::Device &logical() const { return device_; }
+  const vk::raii::PhysicalDevice &physical() const { return physicalDevice_; }
 
   ~VulkanDevice() { vmaAllocator_.destroy(); }
 
   ImGui_ImplVulkan_InitInfo init_info() {
     return ImGui_ImplVulkan_InitInfo{
-        .PhysicalDevice = *physicalDevice,
-        .Device = *device,
-        .QueueFamily = queueFamily,
-        .Queue = *queue,
-        .DescriptorPool = *descriptorPool,
+        .PhysicalDevice = *physicalDevice_,
+        .Device = *device_,
+        .QueueFamily = queueFamily_,
+        .Queue = *queue_,
+        .DescriptorPool = *descriptorPool_,
     };
   }
 
   [[nodiscard]] std::expected<void, std::string> pickPhysicalDevice() {
-    if (auto expected = instance.enumeratePhysicalDevices(); expected) {
+    if (auto expected = instance_.enumeratePhysicalDevices(); expected) {
       if (expected->empty()) {
         return std::unexpected("No Vulkan-compatible physical devices found!");
       }
-      physicalDevice = std::move(expected->front());
+      physicalDevice_ = std::move(expected->front());
       return {};
     } else {
       return std::unexpected("Failed to enumerate physical devices: " +
@@ -87,8 +88,8 @@ public:
   }
 
   [[nodiscard]] std::expected<void, std::string> createLogicalDevice() {
-    queueFamily = selectQueueFamilyIndex(physicalDevice);
-    if (queueFamily == (u32)-1) {
+    queueFamily_ = selectQueueFamilyIndex(physicalDevice_);
+    if (queueFamily_ == (u32)-1) {
       return std::unexpected("Failed to select queue family index");
     }
 
@@ -98,17 +99,17 @@ public:
 
     u32 properties_count;
     std::vector<vk::ExtensionProperties> properties =
-        physicalDevice.enumerateDeviceExtensionProperties();
+        physicalDevice_.enumerateDeviceExtensionProperties();
 
     const float queue_priority[] = {1.0f};
     vk::DeviceQueueCreateInfo queue_info[1] = {};
-    queue_info[0].queueFamilyIndex = queueFamily;
+    queue_info[0].queueFamilyIndex = queueFamily_;
     queue_info[0].queueCount = 1;
     queue_info[0].pQueuePriorities = queue_priority;
 
     vk::PhysicalDeviceFeatures enabledFeatures{};
     enabledFeatures.samplerAnisotropy = true;
-    if (auto expected = physicalDevice.createDevice({
+    if (auto expected = physicalDevice_.createDevice({
             .queueCreateInfoCount = sizeof(queue_info) / sizeof(queue_info[0]),
             .pQueueCreateInfos = queue_info,
             .enabledExtensionCount = static_cast<u32>(deviceExtensions.size()),
@@ -116,17 +117,27 @@ public:
             .pEnabledFeatures = &enabledFeatures,
         });
         expected) {
-      device = std::move(*expected);
+      device_ = std::move(*expected);
     } else {
       return std::unexpected(std::format("error with device {}", vk::to_string(expected.error())));
     }
-    if (auto expected = device.getQueue(queueFamily, 0); expected) {
-      queue = std::move(*expected);
+    if (auto expected = device_.getQueue(queueFamily_, 0); expected) {
+      queue_ = std::move(*expected);
     } else {
       return std::unexpected(std::format("error with queue {}", vk::to_string(expected.error())));
     }
 
-    if (auto expected = createVmaAllocator(instance, physicalDevice, device); expected) {
+    vk::CommandPoolCreateInfo poolCreateInfo{.flags =
+                                                 vk::CommandPoolCreateFlagBits::eTransient |
+                                                 vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                             .queueFamilyIndex = queueFamily_};
+    auto transientPoolResult = device_.createCommandPool(poolCreateInfo);
+    if (!transientPoolResult)
+      return std::unexpected("Failed to create transient command pool: " +
+                             vk::to_string(transientPoolResult.error()));
+    transientCommandPool_ = std::move(transientPoolResult.value());
+
+    if (auto expected = createVmaAllocator(instance_, physicalDevice_, device_); expected) {
       vmaAllocator_ = std::move(*expected);
       return {};
     } else {
@@ -136,7 +147,7 @@ public:
 
   [[nodiscard]] std::expected<void, std::string>
   createDescriptorPool(uint32_t imageCountBasedFactor) {
-    if (!*device) {
+    if (!*device_) {
       return std::unexpected("VulkanDevice::createDescriptorPool: Logical device is null. Call "
                              "createLogicalDevice first.");
     }
@@ -181,13 +192,13 @@ public:
     };
 
     // If descriptorPool can be re-created, ensure the old one is properly destroyed.
-    if (*descriptorPool) {
+    if (*descriptorPool_) {
       // Consider device.waitIdle() here if descriptor sets from the old pool might still be in use.
       // For simplicity, assuming this is called during setup or a controlled resize.
-      descriptorPool.clear(); // Resets the RAII handle, old pool is destroyed.
+      descriptorPool_.clear(); // Resets the RAII handle, old pool is destroyed.
     }
 
-    auto poolResult = device.createDescriptorPool(pool_info); // Using the member vk::raii::Device
+    auto poolResult = device_.createDescriptorPool(pool_info); // Using the member vk::raii::Device
     if (!poolResult) {
       return std::unexpected(
           std::format("VulkanDevice::createDescriptorPool: Failed to create descriptor pool: {} - "
@@ -197,7 +208,7 @@ public:
                       (pool_sizes.size() > 1 ? pool_sizes[1].descriptorCount : 0),
                       (pool_sizes.size() > 2 ? pool_sizes[2].descriptorCount : 0)));
     }
-    descriptorPool = std::move(poolResult.value());
+    descriptorPool_ = std::move(poolResult.value());
     return {};
   }
 
@@ -206,15 +217,15 @@ public:
                vk::MemoryPropertyFlags memoryProperties) NOEXCEPT {
     BufferResources resources;
 
-    if (auto buf = device.createBuffer(
+    if (auto buf = device_.createBuffer(
             {.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive})) {
       resources.buffer = std::move(*buf);
     } else {
       return std::unexpected("Buffer creation failed: " + vk::to_string(buf.error()));
     }
 
-    auto memReqs = device.getBufferMemoryRequirements2({.buffer = resources.buffer});
-    if (auto mem = device.allocateMemory(
+    auto memReqs = device_.getBufferMemoryRequirements2({.buffer = resources.buffer});
+    if (auto mem = device_.allocateMemory(
             {.allocationSize = memReqs.memoryRequirements.size,
              .memoryTypeIndex =
                  findMemoryType(memReqs.memoryRequirements.memoryTypeBits, memoryProperties)})) {
@@ -291,5 +302,68 @@ public:
 
     return VmaImage(vmaAllocator_, outImage, outAllocation, outAllocInfo, imageCreateInfo.format,
                     imageCreateInfo.extent);
+  }
+
+  [[nodiscard]] std::expected<vk::raii::CommandBuffer, std::string> beginSingleTimeCommands() {
+    if (!*transientCommandPool_) {
+      return std::unexpected("VulkanDevice: Transient command pool not initialized.");
+    }
+
+    vk::CommandBufferAllocateInfo allocInfo{.commandPool = *transientCommandPool_,
+                                            .level = vk::CommandBufferLevel::ePrimary,
+                                            .commandBufferCount = 1};
+
+    // Use allocateCommandBuffersUnique for RAII vk::raii::CommandBuffer
+    auto cmdBuffersResult = device_.allocateCommandBuffers(allocInfo);
+    if (!cmdBuffersResult) {
+      return std::unexpected("Failed to allocate single-time command buffer: " +
+                             vk::to_string(cmdBuffersResult.error()));
+    }
+    // The vector contains unique_ptr-like RAII command buffers. Move the first one out.
+    vk::raii::CommandBuffer commandBuffer = std::move(cmdBuffersResult.value().front());
+
+    vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+    commandBuffer.begin(beginInfo); // begin() on vk::raii::CommandBuffer returns vk::Result
+    return std::move(commandBuffer);
+  }
+
+  // *** NEW: Helper to end and submit a single-time command buffer ***
+  [[nodiscard]] std::expected<void, std::string> endSingleTimeCommands(
+      vk::raii::CommandBuffer commandBuffer) {      // Takes by value to manage lifetime
+    if (!*commandBuffer || !*queue_ || !*device_) { // Basic checks
+      return std::unexpected("VulkanDevice: Invalid parameter for endSingleTimeCommands.");
+    }
+
+    commandBuffer.end();
+
+    vk::SubmitInfo submitInfo{
+        .commandBufferCount = 1,
+        .pCommandBuffers = &*commandBuffer // Get raw handle from RAII wrapper
+    };
+
+    // Create a fence for synchronization
+    auto fenceResult = device_.createFence({}); // RAII fence
+    if (!fenceResult) {
+      return std::unexpected("Failed to create fence for single-time command: " +
+                             vk::to_string(fenceResult.error()));
+    }
+    vk::raii::Fence fence = std::move(*fenceResult);
+
+    queue_.submit(submitInfo, *fence);
+
+    vk::Result waitResult =
+        device_.waitForFences({*fence}, VK_TRUE, UINT64_MAX); // Use VK_TRUE or true
+    if (waitResult != vk::Result::eSuccess) {
+      return std::unexpected("Failed to wait for single-time command fence: " +
+                             vk::to_string(waitResult));
+    }
+
+    // Command buffer (and fence) will be automatically destroyed by RAII when they go out of scope.
+    // If the command buffer was allocated from transientCommandPool_ with eResetCommandBuffer,
+    // it's good practice to reset the pool or individual buffers if they are to be reused,
+    // but for true one-time use, just letting RAII free it is fine.
+    // The transientCommandPool_ itself can be reset via transientCommandPool_.reset() if desired,
+    // for example, at the end of a larger loading operation.
+    return {};
   }
 };

@@ -101,7 +101,7 @@ export class App {
 
   // Scene and Assets
   Scene scene{0};
-  TextureStore textureStore{device, device.queue};
+  TextureStore textureStore{device, device.queue_};
   std::vector<std::unique_ptr<Mesh>> appOwnedMeshes; // App owns all mesh objects
 
   Camera camera;
@@ -147,7 +147,6 @@ public:
   }
 
   void createPipelines() { // Simplified pipeline creation
-
     if (graphicsPipelines.empty()) {
 
       graphicsPipelines.resize(2); // For now, one main pipeline
@@ -160,15 +159,6 @@ public:
 
     auto vertShaderModule = createShaderModuleFromFile(device.logical(), "shaders/vert.spv");
     auto fragShaderModule = createShaderModuleFromFile(device.logical(), "shaders/frag.spv");
-
-    if (!vertShaderModule) {
-
-    } else {
-    }
-    if (!fragShaderModule) {
-
-    } else {
-    }
 
     if (!vertShaderModule || !fragShaderModule) {
       std::println("Error loading shaders: {} & {}", vertShaderModule.error_or(""),
@@ -323,7 +313,6 @@ public:
         {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "Z_Axis_Node"});
   }
 
-  // --- added: placeholder for gltf loading and scene population ---
   void loadAndInstanceGltfModel(const std::string &filePath, u32 currentImageCount) {
     if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
       std::println("Error: Prerequisites not met for loading GLTF model '{}'.", filePath);
@@ -345,10 +334,10 @@ public:
 
     // Populate the main scene with data from GLTF
     // This uses SceneBuilder.cppm
-    auto builtMeshesResult = populateSceneFromGltf(
-        this->scene, gltfData, this->device, textureStore,
-        &this->graphicsPipelines[0], // Use the main mesh pipeline for GLTF models
-        currentImageCount);
+    auto builtMeshesResult =
+        populateSceneFromGltf(scene, gltfData, device, textureStore,
+                              &graphicsPipelines[0], // Use the main mesh pipeline for GLTF models
+                              currentImageCount);
 
     if (!builtMeshesResult) {
       std::println("Failed to build engine scene from GLTF data for '{}': {}", filePath,
@@ -377,10 +366,10 @@ public:
     EXPECTED_VOID(device.pickPhysicalDevice());
     EXPECTED_VOID(device.createLogicalDevice());
     EXPECTED_VOID(createCombinedMeshDescriptorSetLayout());
-    // auto cacheResult = device.logical().createPipelineCache({});
-    // if (cacheResult) {
-    //   pipelineCache = std::move(cacheResult.value());
-    // }
+    auto cacheResult = device.logical().createPipelineCache({});
+    if (cacheResult) {
+      pipelineCache = std::move(cacheResult.value());
+    }
     EXPECTED_VOID(textureStore.createInternalCommandPool());
   }
 
@@ -409,13 +398,11 @@ public:
 #ifdef APP_USE_UNLIMITED_FRAME_RATE
     std::vector<vk::PresentModeKHR> present_modes = {vk::PresentModeKHR::eMailbox,
                                                      vk::PresentModeKHR::eFifo};
-
 #else
     std::vector<vk::PresentModeKHR> present_modes = {vk::PresentModeKHR::eFifo};
-
 #endif
-    wd.config.PresentMode = selectPresentMode(device.physical(), wd.Surface, present_modes);
 
+    wd.config.PresentMode = selectPresentMode(device.physical(), wd.Surface, present_modes);
     wd.config.ClearEnable = true;
     wd.config.ClearValue.color = vk::ClearColorValue(std::array<float, 4>{0.f, 0.f, 0.f, 1.0f});
 
@@ -503,7 +490,7 @@ public:
                               .pCommandBuffers = &*currentFrame.CommandBuffer,
                               .signalSemaphoreCount = 1,
                               .pSignalSemaphores = &*render_complete_semaphore};
-    device.queue.submit({submitInfo}, *currentFrame.Fence);
+    device.queue_.submit({submitInfo}, *currentFrame.Fence);
   }
 
   void FramePresent() {
@@ -519,7 +506,7 @@ public:
                                    .pSwapchains = &*wd.Swapchain,
                                    .pImageIndices = &wd.FrameIndex};
 
-    vk::Result presentResult = device.queue.presentKHR(presentInfo);
+    vk::Result presentResult = device.queue_.presentKHR(presentInfo);
     if (presentResult == vk::Result::eErrorOutOfDateKHR ||
         presentResult == vk::Result::eSuboptimalKHR) {
       swapChainRebuild = true;
@@ -538,7 +525,6 @@ public:
   }
 
   void ProcessKeyboard(Camera &cam, SDL_Scancode key, float dt) {
-
     float velocity = cam.MovementSpeed * dt;
     if (key == SDL_SCANCODE_W)
       cam.Position += cam.Front * velocity;
@@ -555,7 +541,6 @@ public:
   }
 
   void updateCamera(float dt) {
-
     const auto keystate = SDL_GetKeyboardState(nullptr);
     if (keystate[SDL_SCANCODE_W])
       ProcessKeyboard(camera, SDL_SCANCODE_W, dt);
@@ -572,7 +557,6 @@ public:
   }
 
   void mainLoop(SDL_Window *sdl_window) {
-
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
@@ -581,9 +565,6 @@ public:
     float deltaTime = 0.0f;
 
     bool done = false;
-    // bool firstMouse = true; // Not used currently
-    // float lastMouseX = static_cast<float>(wd.config.swapchainExtent.width / 2.0f); // Not used
-    // float lastMouseY = static_cast<float>(wd.config.swapchainExtent.height / 2.0f); // Not used
 
     while (!done) {
       auto currentTime = Clock::now();
@@ -640,7 +621,7 @@ public:
 
         scene.setImageCount(static_cast<u32>(wd.Frames.size()));
 
-        scene.allocateAllDescriptorSets(device.descriptorPool, combinedMeshLayout);
+        scene.allocateAllDescriptorSets(device.descriptorPool_, combinedMeshLayout);
 
         for (u32 i = 0; i < wd.Frames.size(); ++i)
           scene.updateAllDescriptorSetContents(i);
@@ -671,7 +652,7 @@ public:
 
     SetupVulkanWindow(sdl_window, get_window_size(sdl_window));
 
-    u32 numMeshesEstimate = 10;
+    u32 numMeshesEstimate = 30;
 
     EXPECTED_VOID(
         device.createDescriptorPool(static_cast<u32>(wd.Frames.size()) * numMeshesEstimate));
@@ -679,10 +660,12 @@ public:
     createPipelines();
 
     scene = Scene(static_cast<u32>(wd.Frames.size()));
+    loadAndInstanceGltfModel("../assets/models/BoxVertexColors.gltf",
+                             static_cast<u32>(wd.Frames.size()));
     createTexturedCubeScene(static_cast<u32>(wd.Frames.size()));
     createDebugAxesScene(static_cast<u32>(wd.Frames.size()));
 
-    scene.allocateAllDescriptorSets(device.descriptorPool, combinedMeshLayout);
+    scene.allocateAllDescriptorSets(device.descriptorPool_, combinedMeshLayout);
 
     for (u32 i = 0; i < wd.Frames.size(); ++i)
       scene.updateAllDescriptorSetContents(i);
@@ -696,8 +679,8 @@ public:
     init_info.Instance = instance.get_C_handle();
     init_info.PhysicalDevice = *device.physical();
     init_info.Device = *device.logical();
-    init_info.Queue = *device.queue;
-    init_info.DescriptorPool = *device.descriptorPool;
+    init_info.Queue = *device.queue_;
+    init_info.DescriptorPool = *device.descriptorPool_;
     init_info.RenderPass = *wd.RenderPass;
     init_info.MinImageCount = MIN_IMAGE_COUNT;
     init_info.ImageCount = static_cast<uint32_t>(wd.Frames.size());
@@ -718,7 +701,6 @@ public:
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
-    Logger::Shutdown(); // Explicitly shutdown here if App destructor might not be called
     // reliably on crash
     return 0;
   }
@@ -728,7 +710,6 @@ export struct SDL_Wrapper {
   SDL_Window *window{nullptr};
 
   int init() {
-    Logger::Init("vulkan_app_log.txt"); // Initialize logger here
     if constexpr (VK_USE_PLATFORM_WAYLAND_KHR) {
       SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
     }
@@ -758,6 +739,3 @@ export struct SDL_Wrapper {
     SDL_Quit();
   }
 };
-
-// Global check_vk_result is already defined and logs.
-// No need to redefine here.

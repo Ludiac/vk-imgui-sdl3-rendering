@@ -58,8 +58,8 @@ void RenderCameraControlMenu(Camera &camera) {
   ImGui::SliderFloat("Yaw", &camera.Yaw, -180.0f, 180.0f);
   ImGui::SliderFloat("Pitch", &camera.Pitch, -89.0f, 89.0f);
   ImGui::SliderFloat("FOV", &camera.Zoom, 1.0f, 120.0f);
-  ImGui::SliderFloat("Near Plane", &camera.Near, 0.01f, 10.0f);
-  ImGui::SliderFloat("Far Plane", &camera.Far, 10.0f, 1000.0f);
+  ImGui::SliderFloat("Near Plane", &camera.Near, 0.01f, 1000.0f);
+  ImGui::SliderFloat("Far Plane", &camera.Far, 0.01f, 1000.0f);
   ImGui::SliderFloat("Move Speed", &camera.MovementSpeed, 0.1f, 10.0f);
   ImGui::SliderFloat("Mouse Sens", &camera.MouseSensitivity, 0.01f, 1.0f);
   ImGui::End();
@@ -97,8 +97,8 @@ void RenderVulkanStateWindow(VulkanDevice &device, Window &wd, int frameCap, flo
   }
 
   if (ImGui::CollapsingHeader("Queue")) {
-    ImGui::Text("Graphics Queue Family: %u", device.queueFamily);
-    auto props = device.physical().getQueueFamilyProperties()[device.queueFamily];
+    ImGui::Text("Graphics Queue Family: %u", device.queueFamily_);
+    auto props = device.physical().getQueueFamilyProperties()[device.queueFamily_];
     ImGui::Text("Queue Count: %u", props.queueCount);
     ImGui::Text("Timestamp Valid Bits: %u", props.timestampValidBits);
   }

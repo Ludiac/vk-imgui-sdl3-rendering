@@ -193,7 +193,6 @@ createVmaAllocator(vk::Instance instance, vk::PhysicalDevice physicalDevice, vk:
     apiVersion = instanceVersionResult.value;
   }
   vma::AllocatorCreateInfo allocatorInfo = {
-      // .flags = vma::AllocatorCreateFlags{VMA_ALLOCATION_CREATE_MAPPED_BIT}, wrong flag
       .physicalDevice = static_cast<vk::PhysicalDevice>(physicalDevice),
       .device = static_cast<vk::Device>(device),
       .instance = static_cast<vk::Instance>(instance),

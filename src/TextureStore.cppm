@@ -22,7 +22,7 @@ private:
 public:
   // Helper to create the command pool
   [[nodiscard]] std::expected<void, std::string> createInternalCommandPool() {
-    if (!*device_.logical() || !*transferQueue_ || device_.queueFamily == static_cast<u32>(-1)) {
+    if (!*device_.logical() || !*transferQueue_ || device_.queueFamily_ == static_cast<u32>(-1)) {
       return std::unexpected("TextureStore::createInternalCommandPool: VulkanDevice logical device "
                              "or queue family not initialized.");
     }
@@ -31,8 +31,8 @@ public:
             .flags = vk::CommandPoolCreateFlagBits::eTransient |
                      vk::CommandPoolCreateFlagBits::eResetCommandBuffer, // Suitable for one-off or
                                                                          // reusable buffers
-            .queueFamilyIndex = device_.queueFamily // Use the graphics queue family (or a dedicated
-                                                    // transfer family if available)
+            .queueFamilyIndex = device_.queueFamily_ // Use the graphics queue family (or a
+                                                     // dedicated transfer family if available)
         });
         !poolResult) {
       return std::unexpected(

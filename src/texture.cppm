@@ -46,58 +46,59 @@ findMemoryType(const vk::raii::PhysicalDevice &physicalDevice, uint32_t typeFilt
   return std::unexpected("TextureHelpers::findMemoryType: Failed to find suitable memory type.");
 }
 
-// Begins a command buffer for single-time submission.
-[[nodiscard]] std::expected<vk::raii::CommandBuffer, std::string>
-beginSingleTimeCommands(const vk::raii::Device &device, const vk::raii::CommandPool &commandPool) {
-  vk::CommandBufferAllocateInfo allocInfo{.commandPool = *commandPool,
-                                          .level = vk::CommandBufferLevel::ePrimary,
-                                          .commandBufferCount = 1};
-
-  // Use vk::raii::CommandBuffers to allocate and manage command buffers.
-  // This returns a ResultValue containing a vector of vk::raii::CommandBuffer.
-  auto cmdBuffersResult = device.allocateCommandBuffers(allocInfo);
-  if (!cmdBuffersResult) {
-    return std::unexpected(
-        "TextureHelpers::beginSingleTimeCommands: Failed to allocate command buffers: " +
-        vk::to_string(cmdBuffersResult.error()));
-  }
-  // We requested one command buffer, so take the first (and only) one.
-  // std::move is essential here as CommandBuffersUnique holds unique_ptr-like objects.
-  vk::raii::CommandBuffer commandBuffer = std::move(cmdBuffersResult.value().front());
-
-  vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
-
-  commandBuffer.begin(beginInfo);
-  return std::move(commandBuffer); // Return by value (moved)
-}
-
-// Ends, submits, and waits for a single-time command buffer to complete.
-[[nodiscard]] std::expected<void, std::string>
-endSingleTimeCommands(const vk::raii::Device &device,
-                      vk::raii::CommandBuffer &&commandBuffer, // Consumes the command buffer
-                      const vk::raii::Queue &queue) {
-  commandBuffer.end();
-
-  vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer};
-
-  vk::raii::Fence fence{nullptr};
-  auto fenceResultValue = device.createFence(vk::FenceCreateInfo{});
-  if (!fenceResultValue) {
-    return std::unexpected("TextureHelpers::endSingleTimeCommands: Failed to create fence: " +
-                           vk::to_string(fenceResultValue.error()));
-  }
-  fence = std::move(fenceResultValue.value());
-
-  queue.submit(submitInfo, *fence);
-
-  // Use true instead of VK_TRUE
-  vk::Result waitResult = device.waitForFences({*fence}, true, UINT64_MAX);
-  if (waitResult != vk::Result::eSuccess) {
-    return std::unexpected("TextureHelpers::endSingleTimeCommands: Failed to wait for fence: " +
-                           vk::to_string(waitResult));
-  }
-  return {};
-}
+// // Begins a command buffer for single-time submission.
+// [[nodiscard]] std::expected<vk::raii::CommandBuffer, std::string>
+// beginSingleTimeCommands(const vk::raii::Device &device, const vk::raii::CommandPool &commandPool)
+// {
+//   vk::CommandBufferAllocateInfo allocInfo{.commandPool = *commandPool,
+//                                           .level = vk::CommandBufferLevel::ePrimary,
+//                                           .commandBufferCount = 1};
+//
+//   // Use vk::raii::CommandBuffers to allocate and manage command buffers.
+//   // This returns a ResultValue containing a vector of vk::raii::CommandBuffer.
+//   auto cmdBuffersResult = device.allocateCommandBuffers(allocInfo);
+//   if (!cmdBuffersResult) {
+//     return std::unexpected(
+//         "TextureHelpers::beginSingleTimeCommands: Failed to allocate command buffers: " +
+//         vk::to_string(cmdBuffersResult.error()));
+//   }
+//   // We requested one command buffer, so take the first (and only) one.
+//   // std::move is essential here as CommandBuffersUnique holds unique_ptr-like objects.
+//   vk::raii::CommandBuffer commandBuffer = std::move(cmdBuffersResult.value().front());
+//
+//   vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+//
+//   commandBuffer.begin(beginInfo);
+//   return std::move(commandBuffer); // Return by value (moved)
+// }
+//
+// // Ends, submits, and waits for a single-time command buffer to complete.
+// [[nodiscard]] std::expected<void, std::string>
+// endSingleTimeCommands(const vk::raii::Device &device,
+//                       vk::raii::CommandBuffer &&commandBuffer, // Consumes the command buffer
+//                       const vk::raii::Queue &queue) {
+//   commandBuffer.end();
+//
+//   vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer};
+//
+//   vk::raii::Fence fence{nullptr};
+//   auto fenceResultValue = device.createFence(vk::FenceCreateInfo{});
+//   if (!fenceResultValue) {
+//     return std::unexpected("TextureHelpers::endSingleTimeCommands: Failed to create fence: " +
+//                            vk::to_string(fenceResultValue.error()));
+//   }
+//   fence = std::move(fenceResultValue.value());
+//
+//   queue.submit(submitInfo, *fence);
+//
+//   // Use true instead of VK_TRUE
+//   vk::Result waitResult = device.waitForFences({*fence}, true, UINT64_MAX);
+//   if (waitResult != vk::Result::eSuccess) {
+//     return std::unexpected("TextureHelpers::endSingleTimeCommands: Failed to wait for fence: " +
+//                            vk::to_string(waitResult));
+//   }
+//   return {};
+// }
 
 // Transitions the layout of a Vulkan image.
 void transitionImageLayout(const vk::raii::CommandBuffer &commandBuffer, vk::Image image,
@@ -600,8 +601,7 @@ export std::expected<Texture, std::string> createTexture3(
     return std::unexpected("createTexture: VMA image creation failed: " + vmaImageResult.error());
   textureOut.image = std::move(vmaImageResult.value());
 
-  auto commandBufferExpected =
-      TextureHelpers::beginSingleTimeCommands(vulkanDevice.logical(), commandPool);
+  auto commandBufferExpected = vulkanDevice.beginSingleTimeCommands();
   if (!commandBufferExpected) {
     return std::unexpected("createTexture: " + commandBufferExpected.error());
   }
@@ -660,12 +660,8 @@ export std::expected<Texture, std::string> createTexture3(
                                           baseSubresourceRange);
   }
 
-  auto endCommandsExpected = TextureHelpers::endSingleTimeCommands(
-      vulkanDevice.logical(), std::move(commandBuffer), transferQueue);
+  auto endCommandsExpected = vulkanDevice.endSingleTimeCommands(std::move(commandBuffer));
   if (!endCommandsExpected) {
-    // Staging buffer and its memory are RAII and will be cleaned up.
-    // Texture image and memory are also RAII and will be cleaned up if this function returns an
-    // error.
     return std::unexpected("createTexture: " + endCommandsExpected.error());
   }
   // --- Command Buffer for layout transitions and copy ---

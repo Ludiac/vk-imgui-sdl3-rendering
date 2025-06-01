@@ -35,8 +35,6 @@ export struct Transform {
   // Optional: For continuous rotation, applied in update()
   glm::vec3 rotation_speed_euler_dps{0.0f}; // Euler angles in degrees per second for rotation speed
 
-  Transform() = default;
-
   // Updates transform based on time (e.g., for rotation_speed)
   void update(float delta_time) {
     if (glm::length(rotation_speed_euler_dps) > 0.0f) {
