@@ -213,7 +213,7 @@ public:
     float cubeSize = 10.0f;
 
     std::array<std::shared_ptr<Texture>, 6> faceTextures = {
-        textureStore.getColorTexture2({255, 0, 0, 255}),
+        textureStore.getColorTexture("red", {255, 0, 0, 255}),
         textureStore.getColorTexture("green", {0, 255, 0, 255}),
         textureStore.getColorTexture("blue", {0, 0, 255, 255}),
         textureStore.getColorTexture("yellow", {255, 255, 0, 255}),
@@ -244,8 +244,7 @@ public:
       Material faceMaterial;
       faceMaterial.baseColorFactor = glm::vec4(1.0f);
       PBRTextures facePbrTextures;
-      facePbrTextures.baseColor =
-          def.texture ? def.texture : textureStore.getFallbackDefaultTexture();
+      facePbrTextures.baseColor = def.texture ? def.texture : textureStore.getDefaultTexture();
       auto faceMesh =
           std::make_unique<Mesh>(device, def.name, std::move(faceVertices), std::move(faceIndices),
                                  faceMaterial, facePbrTextures, currentImageCount);
@@ -313,14 +312,15 @@ public:
         {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "Z_Axis_Node"});
   }
 
-  void loadAndInstanceGltfModel(const std::string &filePath, u32 currentImageCount) {
+  void loadAndInstanceGltfModel(const std::string &filePath, const std::string &baseDir,
+                                u32 currentImageCount) {
     if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
       std::println("Error: Prerequisites not met for loading GLTF model '{}'.", filePath);
       return;
     }
     std::println("Attempting to load GLTF model: {}", filePath);
 
-    auto loadedGltfDataResult = loadGltfFile(filePath); // From ModelLoader.cppm
+    auto loadedGltfDataResult = loadGltfFile(filePath, baseDir); // From ModelLoader.cppm
     if (!loadedGltfDataResult) {
       std::println("Failed to load GLTF file '{}': {}", filePath, loadedGltfDataResult.error());
       return;
@@ -329,6 +329,11 @@ public:
     const LoadedGltfScene &gltfData = *loadedGltfDataResult;
     if (gltfData.meshes.empty() && gltfData.nodes.empty()) {
       std::println("GLTF file '{}' loaded but contains no meshes or nodes.", filePath);
+      return;
+    }
+
+    if (gltfData.images.empty()) {
+      std::println("GLTF file '{}' loaded but contains no textures.", filePath);
       return;
     }
 
@@ -660,9 +665,12 @@ public:
     createPipelines();
 
     scene = Scene(static_cast<u32>(wd.Frames.size()));
-    loadAndInstanceGltfModel("../assets/models/BoxVertexColors.gltf",
+    // loadAndInstanceGltfModel("../assets/models/BoxVertexColors.gltf", "",
+    //                          static_cast<u32>(wd.Frames.size()));
+    loadAndInstanceGltfModel("../assets/models/sphinx-3d-model/scene.gltf",
+                             "../assets/models/sphinx-3d-model/",
                              static_cast<u32>(wd.Frames.size()));
-    createTexturedCubeScene(static_cast<u32>(wd.Frames.size()));
+    // createTexturedCubeScene(static_cast<u32>(wd.Frames.size()));
     createDebugAxesScene(static_cast<u32>(wd.Frames.size()));
 
     scene.allocateAllDescriptorSets(device.descriptorPool_, combinedMeshLayout);

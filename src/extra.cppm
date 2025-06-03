@@ -73,12 +73,13 @@ export std::vector<uint32_t> create_cuboid_indices() {
   return indices;
 }
 
-export void set_projection(glm::mat4 &projection, vk::Extent2D swapchainExtent) {
-  projection = glm::perspective(glm::radians(45.0f),
-                                swapchainExtent.width / (float)swapchainExtent.height, 0.1f, 10.0f);
-}
-
-export void set_view(glm::mat4 &view) {
-  view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
-                     glm::vec3(0.0f, 0.0f, 1.0f));
-}
+// export void set_projection(glm::mat4 &projection, vk::Extent2D swapchainExtent) {
+//   projection = glm::perspective(glm::radians(45.0f),
+//                                 swapchainExtent.width / (float)swapchainExtent.height,
+//                                 0.1f, 10.0f);
+// }
+//
+// export void set_view(glm::mat4 &view) {
+//   view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
+//                      glm::vec3(0.0f, 0.0f, 1.0f));
+// }

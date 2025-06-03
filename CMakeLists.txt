@@ -73,6 +73,7 @@ target_sources(AppModule
         FILES
         ${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm
         ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/src/vk_mem_alloc.cppm
+        src/tinygltf_module_wrapper.cppm
         src/app.cppm
         src/extra.cppm
         src/VulkanWindow.cppm

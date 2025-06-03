@@ -8,149 +8,129 @@ export module vulkan_app:TextureStore;
 import vulkan_hpp;
 import std;
 import :VulkanDevice;
-import :texture; // Imports Texture, PBRTextures, createTexture, createDefaultTexture
+import :texture;
+import :ModelLoader; // For GltfImageData
 
 export class TextureStore {
 private:
   VulkanDevice &device_;
-  vk::raii::CommandPool commandPool_{nullptr}; // Owned command pool
-  const vk::raii::Queue &transferQueue_;       // Queue for texture creation commands
+  vk::raii::CommandPool ownedCommandPool_{nullptr};
+  const vk::raii::Queue &transferQueue_;
 
   std::map<std::string, std::shared_ptr<Texture>> loadedTextures_;
-  std::shared_ptr<Texture> defaultTexture_; // A fallback default texture
+  std::shared_ptr<Texture> defaultWhiteTexture_;
 
 public:
-  // Helper to create the command pool
-  [[nodiscard]] std::expected<void, std::string> createInternalCommandPool() {
-    if (!*device_.logical() || !*transferQueue_ || device_.queueFamily_ == static_cast<u32>(-1)) {
-      return std::unexpected("TextureStore::createInternalCommandPool: VulkanDevice logical device "
-                             "or queue family not initialized.");
-    }
+  [[nodiscard]] std::expected<void, std::string> createInternalCommandPool() { /* ... same ... */
+    if (!*device_.logical() || device_.queueFamily_ == static_cast<u32>(-1))
+      return std::unexpected("TS:createPool: Device/QF not init.");
+    vk::CommandPoolCreateInfo poolInfo{.flags = vk::CommandPoolCreateFlagBits::eTransient |
+                                                vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+                                       .queueFamilyIndex = device_.queueFamily_};
+    auto poolResult = device_.logical().createCommandPool(poolInfo);
+    if (!poolResult)
+      return std::unexpected("TS:createPool: Pool creation failed: " +
+                             vk::to_string(poolResult.error()));
+    ownedCommandPool_ = std::move(poolResult.value());
 
-    if (auto poolResult = device_.logical().createCommandPool({
-            .flags = vk::CommandPoolCreateFlagBits::eTransient |
-                     vk::CommandPoolCreateFlagBits::eResetCommandBuffer, // Suitable for one-off or
-                                                                         // reusable buffers
-            .queueFamilyIndex = device_.queueFamily_ // Use the graphics queue family (or a
-                                                     // dedicated transfer family if available)
-        });
-        !poolResult) {
-      return std::unexpected(
-          "TextureStore::createInternalCommandPool: Failed to create command pool: " +
-          vk::to_string(poolResult.error()));
-    } else {
-      commandPool_ = std::move(poolResult.value());
-    }
-    auto defaultTexResult =
-        createDefaultTexture(device_, commandPool_, transferQueue_, // Use owned command pool
-                             vk::Format::eR8G8B8A8Unorm, {255, 0, 255, 255} // Magenta
-        );
-    if (defaultTexResult) {
-      defaultTexture_ = std::make_shared<Texture>(std::move(*defaultTexResult));
-    } else {
-      std::println("CRITICAL: TextureStore failed to create its internal default texture: {}",
-                   defaultTexResult.error());
-      // defaultTexture_ might remain nullptr, which needs to be handled by users.
-    }
+    auto defaultTexResult = createDefaultTexture(device_, ownedCommandPool_, transferQueue_,
+                                                 vk::Format::eR8G8B8A8Unorm, {255, 255, 255, 255});
+    if (defaultTexResult)
+      defaultWhiteTexture_ = std::make_shared<Texture>(std::move(*defaultTexResult));
+    else
+      std::println("CRITICAL: TS failed to create magenta default: {}", defaultTexResult.error());
+
     return {};
   }
 
-  // Constructor now only takes device and queue, creates its own command pool
   TextureStore(VulkanDevice &device, const vk::raii::Queue &queue)
       : device_(device), transferQueue_(queue) {}
 
-  // Gets or creates a texture with a solid color.
-  // Key is used for caching, e.g., "default_red", "placeholder_blue".
-  std::shared_ptr<Texture>
-  getColorTexture(std::string_view name, std::array<uint8_t, 4> color = {255, 255, 255, 255},
-                  vk::Format format = vk::Format::eR8G8B8A8Srgb) // sRGB for color data is common
+  // Load texture from raw pixel data
+  [[nodiscard]] std::shared_ptr<Texture>
+  getTextureFromData(const std::string &cacheKey,    // Unique key for this texture data
+                     const GltfImageData &imageData) // Pass the struct from ModelLoader
   {
-    if (!*commandPool_) {
-      std::println("TextureStore::getColorTexture: Cannot operate without a valid command pool. "
-                   "Returning fallback default.");
-      return defaultTexture_; // Or handle error more explicitly
+    if (!*ownedCommandPool_) {
+      std::println("TS::getTextureFromData: No command pool. Returning fallback default.");
+      return defaultWhiteTexture_;
+    }
+    if (imageData.pixels.empty() || imageData.width == 0 || imageData.height == 0) {
+      std::println(
+          "TS::getTextureFromData: Invalid image data for key '{}'. Returning fallback default.",
+          cacheKey);
+      return defaultWhiteTexture_;
     }
 
-    if (auto it = loadedTextures_.find(name.data()); it != loadedTextures_.end()) {
+    if (auto it = loadedTextures_.find(cacheKey); it != loadedTextures_.end()) {
       return it->second;
     }
 
-    auto texResult = createDefaultTexture(device_, commandPool_, transferQueue_, format,
-                                          color // Use owned command pool
+    vk::Format format = vk::Format::eR8G8B8A8Unorm; // Default
+    if (imageData.component == 4) {
+      format = imageData.isSrgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+    } else if (imageData.component == 3) {
+      // Vulkan often doesn't have great direct support for R8G8B8.
+      // It's common to convert to RGBA8 by adding an alpha channel.
+      // For now, let's assume if component is 3, we might need to handle it or expect RGBA.
+      // Or, if your createTexture can handle it (e.g. by reformatting during staging upload).
+      // Let's assume for now imageData.pixels is already RGBA if component is 3 for simplicity,
+      // or that createTexture will handle it.
+      // This is a common pain point. For now, assume RGBA8 if component is not 4.
+      std::println("Warning: Texture '{}' has {} components. Assuming RGBA for format selection.",
+                   cacheKey, imageData.component);
+      format = imageData.isSrgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
+    } else {
+      std::println(
+          "Warning: Texture '{}' has unsupported component count {}. Using default format.",
+          cacheKey, imageData.component);
+    }
+
+    auto texResult = createTexture3( // This is your existing createTexture from vulkan_app:texture
+        device_, imageData.pixels.data(), imageData.pixels.size(),
+        vk::Extent3D{static_cast<uint32_t>(imageData.width),
+                     static_cast<uint32_t>(imageData.height), 1},
+        format,
+        ownedCommandPool_, // Use owned pool
+        transferQueue_,
+        true // generateMipmaps
     );
 
     if (texResult) {
       std::shared_ptr<Texture> newTexture = std::make_shared<Texture>(std::move(*texResult));
-      loadedTextures_[name.data()] = newTexture;
+      loadedTextures_[cacheKey] = newTexture;
+      std::println("TextureStore: Successfully created texture '{}' from data.", cacheKey);
       return newTexture;
     } else {
-      std::println("TextureStore: Failed to create color texture: {}. Returning internal default.",
-                   texResult.error());
-      std::exit(0);
-      return defaultTexture_; // Return the store's default magenta texture
+      std::println(
+          "TextureStore: Failed to create texture '{}' from data: {}. Returning fallback default.",
+          cacheKey, texResult.error());
+      return defaultWhiteTexture_;
     }
   }
 
-  std::shared_ptr<Texture>
-  getColorTexture2(std::array<uint8_t, 4> color = {255, 255, 255, 255},
-                   vk::Format format = vk::Format::eR8G8B8A8Srgb) // sRGB for color data is common
-  {
-    if (!*commandPool_) {
-      std::println("TextureStore::getColorTexture: Cannot operate without a valid command pool. "
-                   "Returning fallback default.");
-      return defaultTexture_; // Or handle error more explicitly
-    }
-
-    if (auto it = loadedTextures_.find("colorful"); it != loadedTextures_.end()) {
+  [[nodiscard]] std::shared_ptr<Texture>
+  getColorTexture(const std::string &key, std::array<uint8_t, 4> color,
+                  vk::Format format = vk::Format::eR8G8B8A8Srgb) { /* ... same ... */
+    if (!*ownedCommandPool_)
+      return defaultWhiteTexture_;
+    if (auto it = loadedTextures_.find(key); it != loadedTextures_.end())
       return it->second;
-    }
-
-    auto texResult = createTestPatternTexture(device_, commandPool_, transferQueue_, format, color);
-
+    auto texResult =
+        createDefaultTexture(device_, ownedCommandPool_, transferQueue_, format, color);
     if (texResult) {
-      std::shared_ptr<Texture> newTexture = std::make_shared<Texture>(std::move(*texResult));
-      loadedTextures_["colorful"] = newTexture;
-      return newTexture;
-    } else {
-      std::println("TextureStore: Failed to create color texture: {}. Returning internal default.",
-                   texResult.error());
-      return defaultTexture_; // Return the store's default magenta texture
+      auto newTex = std::make_shared<Texture>(std::move(*texResult));
+      loadedTextures_[key] = newTex;
+      return newTex;
     }
+    std::println("TS: Failed to create color texture '{}': {}. Returning fallback.", key,
+                 texResult.error());
+    return defaultWhiteTexture_;
   }
 
-  // Placeholder for future file loading
-  // std::shared_ptr<Texture> loadTextureFromFile(const std::string& filePath) {
-  //     if (!ownedCommandPool_) {
-  //         std::println("TextureStore::loadTextureFromFile: Cannot operate without a valid command
-  //         pool. Returning fallback default."); return defaultTexture_;
-  //     }
-  //     if (auto it = loadedTextures_.find(filePath); it != loadedTextures_.end()) {
-  //         return it->second;
-  //     }
-  //
-  //     // ... (actual loading logic) ...
-  //     // auto texResult = createTexture(device_, pixels, imageSize,
-  //     //                                vk::Extent3D{...},
-  //     //                                format, ownedCommandPool_, transferQueue_); // Use owned
-  //     command pool
-  //     // ...
-  //     std::println("TextureStore: loadTextureFromFile for '{}' not yet implemented. Returning
-  //     internal default.", filePath); return defaultTexture_; // Placeholder
-  // }
+  std::shared_ptr<Texture> getDefaultTexture() const { return defaultWhiteTexture_; }
 
-  // Returns the globally available default texture (e.g., magenta error texture)
-  std::shared_ptr<Texture> getFallbackDefaultTexture() const { return defaultTexture_; }
-
-  // Explicitly defined destructor to ensure ownedCommandPool is valid when accessed
-  // (though RAII handles destruction order correctly if members are well-defined)
-  ~TextureStore() {
-    // ownedCommandPool_ will be automatically destroyed by its RAII wrapper.
-    // If any explicit cleanup related to the pool that isn't handled by RAII
-    // were needed, it would go here. For vk::raii::CommandPool, it's usually not necessary.
-  }
-
-  // Disable copy and move semantics for now, as managing the owned pool
-  // across copies/moves needs care. If needed, implement them properly.
+  ~TextureStore() = default; // RAII for ownedCommandPool_ and shared_ptrs
   TextureStore(const TextureStore &) = delete;
   TextureStore &operator=(const TextureStore &) = delete;
   TextureStore(TextureStore &&) = delete;

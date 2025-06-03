@@ -51,16 +51,18 @@ void renderMeshControlsMenu(f32 framerate, const Scene &scene) {
   }
   ImGui::End();
 }
+
 void RenderCameraControlMenu(Camera &camera) {
   ImGui::Begin("Camera Controls");
   ImGui::Checkbox("Mouse Control", &camera.MouseCaptured);
-  ImGui::SliderFloat3("Position", &camera.Position.x, -10.0f, 10.0f);
+  ImGui::SliderFloat3("Position", &camera.Position.x, -100.0f, 100.0f);
   ImGui::SliderFloat("Yaw", &camera.Yaw, -180.0f, 180.0f);
   ImGui::SliderFloat("Pitch", &camera.Pitch, -89.0f, 89.0f);
+  ImGui::SliderFloat("Roll", &camera.Roll, -180.0f, 180.0f); // Added roll control
   ImGui::SliderFloat("FOV", &camera.Zoom, 1.0f, 120.0f);
   ImGui::SliderFloat("Near Plane", &camera.Near, 0.01f, 1000.0f);
   ImGui::SliderFloat("Far Plane", &camera.Far, 0.01f, 1000.0f);
-  ImGui::SliderFloat("Move Speed", &camera.MovementSpeed, 0.1f, 10.0f);
+  ImGui::SliderFloat("Move Speed", &camera.MovementSpeed, 0.1f, 1000.0f);
   ImGui::SliderFloat("Mouse Sens", &camera.MouseSensitivity, 0.01f, 1.0f);
   ImGui::End();
 }

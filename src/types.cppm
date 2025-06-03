@@ -111,6 +111,7 @@ public:
   glm::vec3 Position{-10.0f, -10.0f, 60.0f}; // World position
   float Yaw = -75.0f;                        // Horizontal rotation (degrees)
   float Pitch = 10.0f;                       // Vertical rotation (degrees)
+  float Roll = 0.0f;                         // Added: Roll rotation (degrees)
   float Zoom = 45.0f;                        // Field of view (degrees)
   float Near = 0.1f;                         // Near clipping plane
   float Far = 10000.0f;                      // Far clipping plane
@@ -130,21 +131,25 @@ public:
   glm::mat4 GetViewMatrix() const { return glm::lookAt(Position, Position + Front, Up); }
 
   glm::mat4 GetProjectionMatrix(float aspectRatio) const {
-    return glm::perspective(glm::radians(Zoom), // Vertical FOV
-                            aspectRatio,        // Window aspect ratio (width/height)
-                            Near,               // Near clipping distance
-                            Far                 // Far clipping distance
-    );
+    return glm::perspective(glm::radians(Zoom), aspectRatio, Near, Far);
   }
 
   void updateVectors() {
+    // Calculate front vector from yaw and pitch
     glm::vec3 front;
     front.x = cos(glm::radians(Yaw)) * cos(glm::radians(Pitch));
     front.y = sin(glm::radians(Pitch));
     front.z = sin(glm::radians(Yaw)) * cos(glm::radians(Pitch));
     Front = glm::normalize(front);
 
-    Right = glm::normalize(glm::cross(Front, WorldUp));
+    // Create rotation quaternion for roll
+    glm::quat rollQuat = glm::angleAxis(glm::radians(Roll), Front);
+
+    // Apply roll rotation to world up
+    glm::vec3 rolledUp = rollQuat * WorldUp;
+
+    // Re-calculate right and up vectors
+    Right = glm::normalize(glm::cross(Front, rolledUp));
     Up = glm::normalize(glm::cross(Right, Front));
   }
 };

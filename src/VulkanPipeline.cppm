@@ -114,9 +114,9 @@ export struct VulkanPipeline {
         .depthClampEnable = false,        // Usually false
         .rasterizerDiscardEnable = false, // Usually false
         .polygonMode = vk::PolygonMode::eFill,
-        .cullMode = vk::CullModeFlagBits::eBack,       // Enable backface culling
-        .frontFace = vk::FrontFace::eCounterClockwise, // Standard for Vulkan (adjust if your
-                                                       // vertices are CW)
+        .cullMode = vk::CullModeFlagBits::eBack, // Enable backface culling
+        .frontFace = vk::FrontFace::eClockwise,  // Standard for Vulkan (adjust if your
+                                                 // vertices are CW)
         .depthBiasEnable = false,
         .lineWidth = 1.0f,
     };

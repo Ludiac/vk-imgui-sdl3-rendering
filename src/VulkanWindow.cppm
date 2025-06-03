@@ -488,10 +488,8 @@ createFramebuffers(const vk::raii::Device &device,
     // *** MODIFIED RENDER PASS CREATION ***
     vk::AttachmentDescription colorAttachment{.format = wd_new.config.SurfaceFormat.format,
                                               .samples = vk::SampleCountFlagBits::e1,
-                                              .loadOp = wd_new.config.ClearEnable
-                                                            ? vk::AttachmentLoadOp::eClear
-                                                            : vk::AttachmentLoadOp::eDontCare,
-                                              .storeOp = vk::AttachmentStoreOp::eStore,
+                                              .loadOp = vk::AttachmentLoadOp::eClear,
+                                              .storeOp = vk::AttachmentStoreOp::eDontCare,
                                               .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
                                               .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
                                               .initialLayout = vk::ImageLayout::eUndefined,
@@ -515,10 +513,8 @@ createFramebuffers(const vk::raii::Device &device,
 
     vk::AttachmentReference colorAttachmentRef{.attachment = 0, // Color attachment is at index 0
                                                .layout = vk::ImageLayout::eColorAttachmentOptimal};
-    vk::AttachmentReference depthAttachmentRef{                 // New depth attachment reference
-                                               .attachment = 1, // Depth attachment is at index 1
-                                               .layout =
-                                                   vk::ImageLayout::eDepthStencilAttachmentOptimal};
+    vk::AttachmentReference depthAttachmentRef{
+        .attachment = 1, .layout = vk::ImageLayout::eDepthStencilAttachmentOptimal};
 
     vk::SubpassDescription subpass{
         .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
