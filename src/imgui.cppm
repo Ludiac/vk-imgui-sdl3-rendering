@@ -85,7 +85,7 @@ void RenderVulkanStateWindow(VulkanDevice &device, Window &wd, int frameCap, flo
   }
 
   if (ImGui::CollapsingHeader("Timing", ImGuiTreeNodeFlags_DefaultOpen)) {
-    ImGui::SliderInt("Frame Cap", &frameCap, 4, 500);
+    // ImGui::SliderInt("Frame Cap", &frameCap, 4, 500);
     ImGui::Text("Frame Time: %.3f ms", frameTime * 1000.0f);
     ImGui::Text("FPS: %.1f", 1.0f / frameTime);
 
@@ -202,14 +202,7 @@ export void RenderSceneHierarchyMaterialEditor(Scene &scene, u32 currentFrameInd
   if (ImGui::Begin("Scene Inspector")) { // Main window for the scene editor
     // An initial TreeNode for the entire scene graph can be helpful.
     if (ImGui::TreeNodeEx("Scene Graph", ImGuiTreeNodeFlags_DefaultOpen)) {
-      if (scene.roots.empty()) { // Check if there are any root nodes in the scene.
-        ImGui::Text("Scene is empty or has no root nodes.");
-      } else {
-        // Iterate over the root nodes of the scene and render the hierarchy from there.
-        for (SceneNode *rootNode : scene.roots) {
-          RenderSceneNodeRecursive(rootNode, currentFrameIndex);
-        }
-      }
+      RenderSceneNodeRecursive(scene.fatherNode_.get(), currentFrameIndex);
       ImGui::TreePop();
     }
     // You could add other scene-wide settings or information here, outside the "Scene Graph"

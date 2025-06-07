@@ -10,6 +10,7 @@ import vulkan_hpp;
 import :VMA;
 import :VulkanDevice;
 import std;
+import :utils;
 
 struct Frame {
   vk::raii::CommandPool CommandPool{nullptr};
@@ -34,7 +35,6 @@ struct WindowConfig {
   vk::ClearValue ClearValue{};
 };
 
-// In VulkanWindow.cppm, modify the Window struct:
 struct Window {
   WindowConfig config;
 
@@ -44,17 +44,15 @@ struct Window {
 
   VmaImage depthVmaImage;
   vk::raii::ImageView depthImageView{nullptr};
-  vk::Format depthFormat{}; // To store the chosen depth format
+  vk::Format depthFormat{};
 
   std::vector<Frame> Frames;
   std::vector<FrameSemaphores> FrameSemaphores;
 
-  uint32_t FrameIndex{};
-  uint32_t SemaphoreIndex{};
+  u32 FrameIndex{};
+  u32 SemaphoreIndex{};
 };
 
-// Add these helper functions (if not already present) in VulkanWindow.cppm
-// or a module imported by VulkanWindow.cppm
 vk::Format findSupportedFormat(const vk::raii::PhysicalDevice &physicalDevice,
                                const std::vector<vk::Format> &candidates, vk::ImageTiling tiling,
                                vk::FormatFeatureFlags features) {
@@ -75,20 +73,6 @@ vk::Format findDepthFormat(const vk::raii::PhysicalDevice &physicalDevice) {
       physicalDevice,
       {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},
       vk::ImageTiling::eOptimal, vk::FormatFeatureFlagBits::eDepthStencilAttachment);
-}
-
-// Helper for finding memory type (if not already in your VulkanDevice or utils)
-uint32_t findMemoryType(const vk::raii::PhysicalDevice &physicalDevice, uint32_t typeFilter,
-                        vk::MemoryPropertyFlags properties) {
-  vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
-  for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
-    if ((typeFilter & (1 << i)) &&
-        (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-      return i;
-    }
-  }
-  std::exit(0);
-  return (u32)-1;
 }
 
 vk::SurfaceFormatKHR selectSurfaceFormat(const vk::raii::PhysicalDevice &physical_device,
@@ -136,7 +120,7 @@ vk::PresentModeKHR selectPresentMode(const vk::raii::PhysicalDevice &physical_de
 
 [[nodiscard]] std::expected<void, std::string>
 createWindowCommandBuffers(const VulkanDevice &device, Window &wd) {
-  for (uint32_t i = 0; i < wd.Frames.size(); i++) {
+  for (u32 i = 0; i < wd.Frames.size(); i++) {
     decltype(auto) fd = wd.Frames[i];
 
     if (auto commandPool = device.logical().createCommandPool({
@@ -172,7 +156,7 @@ createWindowCommandBuffers(const VulkanDevice &device, Window &wd) {
     }
   }
 
-  for (uint32_t i = 0; i < wd.FrameSemaphores.size(); i++) {
+  for (u32 i = 0; i < wd.FrameSemaphores.size(); i++) {
     FrameSemaphores *fsd = &wd.FrameSemaphores[i];
 
     if (auto imageSem = device.logical().createSemaphore({}); imageSem) {
@@ -200,88 +184,31 @@ int getMinImageCountFromPresentMode(vk::PresentModeKHR present_mode) {
     return 2;
   if (present_mode == vk::PresentModeKHR::eImmediate)
     return 1;
-  // IM_ASSERT(0);
+
   return 1;
 }
 
-// Helper to transition image layout (you might have this in a texture utility or VulkanDevice)
-void transitionImageLayout(const vk::raii::Device &device,
-                           const vk::raii::CommandBuffer &commandBuffer, vk::Image image,
-                           vk::Format format, vk::ImageLayout oldLayout,
-                           vk::ImageLayout newLayout) {
-  vk::ImageMemoryBarrier barrier{};
-  barrier.oldLayout = oldLayout;
-  barrier.newLayout = newLayout;
-  barrier.srcQueueFamilyIndex = vk::QueueFamilyIgnored;
-  barrier.dstQueueFamilyIndex = vk::QueueFamilyIgnored;
-  barrier.image = image;
-  barrier.subresourceRange.aspectMask =
-      vk::ImageAspectFlagBits::eDepth; // Assuming depth only, adjust if stencil
-  if (newLayout == vk::ImageLayout::eDepthStencilAttachmentOptimal) {
-    if (format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint) {
-      barrier.subresourceRange.aspectMask |= vk::ImageAspectFlagBits::eStencil;
-    }
-  }
-  barrier.subresourceRange.baseMipLevel = 0;
-  barrier.subresourceRange.levelCount = 1;
-  barrier.subresourceRange.baseArrayLayer = 0;
-  barrier.subresourceRange.layerCount = 1;
-
-  vk::PipelineStageFlags sourceStage;
-  vk::PipelineStageFlags destinationStage;
-
-  if (oldLayout == vk::ImageLayout::eUndefined &&
-      newLayout == vk::ImageLayout::eDepthStencilAttachmentOptimal) {
-    barrier.srcAccessMask = vk::AccessFlagBits::eNone; // Updated from eNoneKHR
-    barrier.dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentRead |
-                            vk::AccessFlagBits::eDepthStencilAttachmentWrite;
-    sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
-    destinationStage = vk::PipelineStageFlagBits::eEarlyFragmentTests;
-  } else {
-    std::exit(0);
-  }
-  commandBuffer.pipelineBarrier(sourceStage, destinationStage, {}, nullptr, nullptr, barrier);
-}
-
-// In VulkanWindow.cppm or wherever Window struct and createDepthResources are
-// Make sure Window struct stores VmaImage for depth:
-/*
-export module vulkan_app:VulkanWindow;
-import :VMA; // For VmaImage
-// ...
-export struct Window {
-    // ... other members ...
-    VmaImage depthVmaImage; // Replaces depthImage and depthImageMemory
-    vk::raii::ImageView depthImageView{nullptr}; // ImageView is still separate
-    vk::Format depthFormat = vk::Format::eUndefined;
-    // ...
-};
-*/
-
-[[nodiscard]] std::expected<void, std::string> createDepthResources( // Renamed for clarity
-    VulkanDevice &vulkan_device, Window &wd, vk::Extent2D extent) {
+[[nodiscard]] std::expected<void, std::string>
+createDepthResources(VulkanDevice &vulkan_device, Window &wd, vk::Extent2D extent) {
   wd.depthFormat = findDepthFormat(vulkan_device.physical());
   if (wd.depthFormat == vk::Format::eUndefined) {
     return std::unexpected("Failed to find suitable depth format.");
   }
 
-  vk::ImageCreateInfo imageCi{
-      .imageType = vk::ImageType::e2D,
-      .format = wd.depthFormat,
-      .extent = vk::Extent3D{extent.width, extent.height, 1},
-      .mipLevels = 1,
-      .arrayLayers = 1,
-      .samples = vk::SampleCountFlagBits::e1,
-      .tiling = vk::ImageTiling::eOptimal,
-      .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
-      .sharingMode = vk::SharingMode::eExclusive,
-      .initialLayout =
-          vk::ImageLayout::eUndefined // VMA doesn't set initial layout for optimal images
-  };
+  vk::ImageCreateInfo imageCi{.imageType = vk::ImageType::e2D,
+                              .format = wd.depthFormat,
+                              .extent = vk::Extent3D{extent.width, extent.height, 1},
+                              .mipLevels = 1,
+                              .arrayLayers = 1,
+                              .samples = vk::SampleCountFlagBits::e1,
+                              .tiling = vk::ImageTiling::eOptimal,
+                              .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                              .sharingMode = vk::SharingMode::eExclusive,
+                              .initialLayout = vk::ImageLayout::eUndefined};
 
   vma::AllocationCreateInfo imageAllocInfo{
       .usage = vma::MemoryUsage::eAutoPreferDevice // Depth buffers are best in device local memory
-      // No eMapped flag needed as CPU doesn't typically access depth buffer directly
+
   };
 
   auto vmaImageResult = vulkan_device.createImageVMA(imageCi, imageAllocInfo);
@@ -290,7 +217,6 @@ export struct Window {
   }
   wd.depthVmaImage = std::move(vmaImageResult.value()); // Store VmaImage
 
-  // --- Create Depth Image View ---
   vk::ImageSubresourceRange depthSubresourceRange{.aspectMask = vk::ImageAspectFlagBits::eDepth,
                                                   .baseMipLevel = 0,
                                                   .levelCount = 1,
@@ -301,15 +227,13 @@ export struct Window {
     depthSubresourceRange.aspectMask |= vk::ImageAspectFlagBits::eStencil;
   }
 
-  vk::ImageViewCreateInfo viewInfo{
-      .image = wd.depthVmaImage.get(), // Get VkImage handle from VmaImage
-      .viewType = vk::ImageViewType::e2D,
-      .format = wd.depthVmaImage.getFormat(), // Get format from VmaImage
-      .subresourceRange = depthSubresourceRange};
+  vk::ImageViewCreateInfo viewInfo{.image = wd.depthVmaImage.get(),
+                                   .viewType = vk::ImageViewType::e2D,
+                                   .format = wd.depthVmaImage.getFormat(),
+                                   .subresourceRange = depthSubresourceRange};
 
-  // If wd.depthImageView is vk::raii::ImageView, create it as unique
   if (*wd.depthImageView)
-    wd.depthImageView.clear(); // Clear existing if any
+    wd.depthImageView.clear();
   auto viewResult = vulkan_device.logical().createImageView(viewInfo);
   if (!viewResult) {
     return std::unexpected("Failed to create depth image view (VMA): " +
@@ -325,7 +249,6 @@ export struct Window {
   }
   vk::raii::CommandBuffer cmdBuffer = std::move(cmdBufferExpected.value());
 
-  // Record barrier for layout transition
   vk::ImageMemoryBarrier barrier{.srcAccessMask = vk::AccessFlagBits::eNone,
                                  .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentRead |
                                                   vk::AccessFlagBits::eDepthStencilAttachmentWrite,
@@ -333,8 +256,7 @@ export struct Window {
                                  .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
                                  .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
                                  .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-                                 .image =
-                                     wd.depthVmaImage.get(), // Use VkImage handle from VmaImage
+                                 .image = wd.depthVmaImage.get(),
                                  .subresourceRange = depthSubresourceRange};
   cmdBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
                             vk::PipelineStageFlagBits::eEarlyFragmentTests |
@@ -347,28 +269,22 @@ export struct Window {
                            endCmdResult.error());
   }
 
-  std::println("Depth resources (VMA) created successfully.");
   return {};
 }
 
-[[nodiscard]] std::expected<void, std::string>
-createFramebuffers(const vk::raii::Device &device,
-                   Window &wd) { // Takes non-const Window&
-  for (uint32_t i = 0; i < wd.Frames.size(); i++) {
+[[nodiscard]] std::expected<void, std::string> createFramebuffers(const vk::raii::Device &device,
+                                                                  Window &wd) {
+  for (u32 i = 0; i < wd.Frames.size(); i++) {
     decltype(auto) fd = wd.Frames[i];
 
-    // Attachments: 0 = Color, 1 = Depth
-    std::array<vk::ImageView, 2> attachments = {
-        *fd.BackbufferView, // Color attachment view
-        *wd.depthImageView  // Depth attachment view (from the Window struct)
-    };
+    std::array<vk::ImageView, 2> attachments = {*fd.BackbufferView, *wd.depthImageView};
 
     const vk::FramebufferCreateInfo createInfo = {
-        .renderPass = *wd.RenderPass, // Use the render pass that includes depth
-        .attachmentCount = static_cast<uint32_t>(attachments.size()), // Now 2 attachments
+        .renderPass = *wd.RenderPass,
+        .attachmentCount = static_cast<u32>(attachments.size()),
         .pAttachments = attachments.data(),
-        .width = static_cast<uint32_t>(wd.config.swapchainExtent.width),
-        .height = static_cast<uint32_t>(wd.config.swapchainExtent.height),
+        .width = static_cast<u32>(wd.config.swapchainExtent.width),
+        .height = static_cast<u32>(wd.config.swapchainExtent.height),
         .layers = 1};
 
     if (*fd.Framebuffer) {
@@ -387,7 +303,7 @@ createFramebuffers(const vk::raii::Device &device,
 
 [[nodiscard]] std::expected<void, std::string> createImageViews(const vk::raii::Device &device,
                                                                 Window &wd) {
-  for (uint32_t i = 0; i < wd.Frames.size(); i++) {
+  for (u32 i = 0; i < wd.Frames.size(); i++) {
     decltype(auto) fd = wd.Frames[i];
 
     const vk::ImageViewCreateInfo createInfo = {
@@ -416,7 +332,7 @@ createFramebuffers(const vk::raii::Device &device,
 [[nodiscard]] std::expected<void, std::string> createWindowSwapChain(VulkanDevice &device,
                                                                      Window &wd_old,
                                                                      vk::Extent2D extent,
-                                                                     uint32_t min_image_count) {
+                                                                     u32 min_image_count) {
   Window wd_new{};
   device.logical().waitIdle();
 
@@ -424,11 +340,10 @@ createFramebuffers(const vk::raii::Device &device,
   std::swap(wd_old.config, wd_new.config);
 
   if (min_image_count == 0) {
-    min_image_count =
-        getMinImageCountFromPresentMode(wd_new.config.PresentMode); // Use wd_new.config
+    min_image_count = getMinImageCountFromPresentMode(wd_new.config.PresentMode);
   }
 
-  auto cap = device.physical().getSurfaceCapabilitiesKHR(*wd_new.Surface); // Use *wd_new.Surface
+  auto cap = device.physical().getSurfaceCapabilitiesKHR(*wd_new.Surface);
 
   vk::SwapchainCreateInfoKHR createInfo = {
       .surface = *wd_new.Surface,
@@ -451,7 +366,7 @@ createFramebuffers(const vk::raii::Device &device,
   } else {
     createInfo.imageExtent = cap.currentExtent;
   }
-  wd_new.config.swapchainExtent = createInfo.imageExtent; // Update config with actual extent
+  wd_new.config.swapchainExtent = createInfo.imageExtent;
 
   auto expectedSwapchain = device.logical().createSwapchainKHR(createInfo);
   if (!expectedSwapchain) {
@@ -466,7 +381,7 @@ createFramebuffers(const vk::raii::Device &device,
     wd_new.FrameSemaphores.resize(images.size() + 1);
   }
 
-  for (uint32_t i = 0; i < wd_new.Frames.size(); ++i) {
+  for (u32 i = 0; i < wd_new.Frames.size(); ++i) {
     wd_new.Frames[i].Backbuffer = images[i];
   }
 
@@ -474,18 +389,9 @@ createFramebuffers(const vk::raii::Device &device,
   if (!depthResult) {
     return std::unexpected("Failed to create depth resources: " + depthResult.error());
   }
-  // At this point, wd_new.depthImage, depthImageView, depthImageMemory, depthFormat are populated.
-  // The depth image layout also needs to be transitioned to eDepthStencilAttachmentOptimal.
-  // This transition should be part of createDepthResources or done immediately after using a
-  // command buffer. For now, assuming createDepthResources handles the transition or you have a
-  // mechanism.
-  // **CRITICAL**: Ensure depth image is transitioned to
-  // vk::ImageLayout::eDepthStencilAttachmentOptimal before being used in a render pass. This
-  // usually requires a command buffer submission.
 
-  if (!wd_new.config
-           .UseDynamicRendering) { // Assuming you create RenderPass if not using dynamic rendering
-    // *** MODIFIED RENDER PASS CREATION ***
+  if (!wd_new.config.UseDynamicRendering) {
+
     vk::AttachmentDescription colorAttachment{.format = wd_new.config.SurfaceFormat.format,
                                               .samples = vk::SampleCountFlagBits::e1,
                                               .loadOp = vk::AttachmentLoadOp::eClear,
@@ -496,34 +402,30 @@ createFramebuffers(const vk::raii::Device &device,
                                               .finalLayout = vk::ImageLayout::ePresentSrcKHR};
 
     vk::AttachmentDescription depthAttachment{
-        // New depth attachment
-        .format = wd_new.depthFormat, // Use the format chosen by findDepthFormat
+
+        .format = wd_new.depthFormat,
         .samples = vk::SampleCountFlagBits::e1,
-        .loadOp = vk::AttachmentLoadOp::eClear,      // Clear depth at the start of the pass
-        .storeOp = vk::AttachmentStoreOp::eDontCare, // We don't need to store depth after render
-                                                     // pass (unless for post-processing)
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eDontCare,
+
         .stencilLoadOp = vk::AttachmentLoadOp::eDontCare,
         .stencilStoreOp = vk::AttachmentStoreOp::eDontCare,
-        .initialLayout =
-            vk::ImageLayout::eDepthStencilAttachmentOptimal, // Or eDepthStencilAttachmentOptimal if
-                                                             // transitioned already
+        .initialLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+
         .finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal};
 
     std::array<vk::AttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
 
-    vk::AttachmentReference colorAttachmentRef{.attachment = 0, // Color attachment is at index 0
+    vk::AttachmentReference colorAttachmentRef{.attachment = 0,
                                                .layout = vk::ImageLayout::eColorAttachmentOptimal};
     vk::AttachmentReference depthAttachmentRef{
         .attachment = 1, .layout = vk::ImageLayout::eDepthStencilAttachmentOptimal};
 
-    vk::SubpassDescription subpass{
-        .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
-        .colorAttachmentCount = 1,
-        .pColorAttachments = &colorAttachmentRef,
-        .pDepthStencilAttachment = &depthAttachmentRef // Set the depth stencil attachment
-    };
+    vk::SubpassDescription subpass{.pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+                                   .colorAttachmentCount = 1,
+                                   .pColorAttachments = &colorAttachmentRef,
+                                   .pDepthStencilAttachment = &depthAttachmentRef};
 
-    // Dependency to ensure depth buffer is ready before depth tests, and color is ready for writing
     vk::SubpassDependency dependency{
         .srcSubpass = vk::SubpassExternal,
         .dstSubpass = 0,
@@ -531,17 +433,16 @@ createFramebuffers(const vk::raii::Device &device,
                         vk::PipelineStageFlagBits::eEarlyFragmentTests,
         .dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput |
                         vk::PipelineStageFlagBits::eEarlyFragmentTests,
-        .srcAccessMask = vk::AccessFlagBits::eNone, // Updated from eNoneKHR
+        .srcAccessMask = vk::AccessFlagBits::eNone,
         .dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite |
                          vk::AccessFlagBits::eDepthStencilAttachmentWrite};
 
-    vk::RenderPassCreateInfo renderPassInfo{
-        .attachmentCount = static_cast<uint32_t>(attachments.size()), // Now 2 attachments
-        .pAttachments = attachments.data(),
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &dependency};
+    vk::RenderPassCreateInfo renderPassInfo{.attachmentCount = static_cast<u32>(attachments.size()),
+                                            .pAttachments = attachments.data(),
+                                            .subpassCount = 1,
+                                            .pSubpasses = &subpass,
+                                            .dependencyCount = 1,
+                                            .pDependencies = &dependency};
 
     auto expectedRenderPass = device.logical().createRenderPass(renderPassInfo);
     if (!expectedRenderPass) {
@@ -568,7 +469,7 @@ createFramebuffers(const vk::raii::Device &device,
 }
 
 void createOrResizeWindow(const vk::raii::Instance &instance, VulkanDevice &device, Window &wd,
-                          vk::Extent2D extent, uint32_t min_image_count) {
+                          vk::Extent2D extent, u32 min_image_count) {
   EXPECTED_VOID(createWindowSwapChain(device, wd, extent, min_image_count));
   EXPECTED_VOID(createWindowCommandBuffers(device, wd));
 }

@@ -1,10 +1,10 @@
 struct UniformBufferObject {
-  float4x4 model;
-  float4x4 view;
-  float4x4 projection;
+    float4x4 model;
+    float4x4 view;
+    float4x4 projection;
+    float3x3 normalMatrix;
 };
 
-// Binding 0, Set 0: MVP Uniform Buffer Object (Vertex Shader)
 [[vk::binding(0, 0)]] // Corresponds to Set 0, Binding 0
 ConstantBuffer<UniformBufferObject> ubo;
 
@@ -22,11 +22,10 @@ struct VertexOutput { // This struct will be the input to the Fragment Shader
 };
 
 VertexOutput main(VertexInput input) {
-  VertexOutput output;
-  float4 worldPos = mul(ubo.model, float4(input.position, 1.0));
-  // float4 viewPos = mul(ubo.view, worldPos); // This line was in the original user prompt but commented out in the thought process. Re-adding as it's standard.
-  output.position = mul(ubo.projection, mul(ubo.view, worldPos)); // Combined view and projection
-  output.worldNormal = mul((float3x3)ubo.model, input.normal); // More robust normal transformation
-  output.uv = input.uv;
-  return output;
+    VertexOutput output;
+    float4 worldPos = mul(ubo.model, float4(input.position, 1.0));
+    output.position = mul(ubo.projection, mul(ubo.view, worldPos));
+    output.worldNormal = mul(ubo.normalMatrix, input.normal);
+    output.uv = input.uv;
+    return output;
 }

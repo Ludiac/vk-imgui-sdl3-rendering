@@ -26,7 +26,20 @@ CPMAddPackage(
 CPMAddPackage(
     NAME tinygltf
     GITHUB_REPOSITORY syoyo/tinygltf
-    VERSION 2.9.6 # Consider using the latest release or a specific commit
+    VERSION 2.9.6 # Consider using the latest release or a specific commit    
+)
+
+CPMAddPackage(
+    NAME bsThreadPool
+    GITHUB_REPOSITORY bshoshany/thread-pool 
+    VERSION 5.0.0
+    PATCHES ${CMAKE_CURRENT_SOURCE_DIR}/patches/bsThread_pool.patch
+)
+
+CPMAddPackage(
+    NAME xxHash
+    GITHUB_REPOSITORY Cyan4973/xxHash
+    GIT_TAG b5694e436dc9fc1c5a0389ac46b446167075490a
 )
 
 CPMAddPackage(
@@ -43,12 +56,11 @@ CPMAddPackage(
     # Let's assume for now it's fine as is, or it provides a target.
 )
 
-# Add VulkanMemoryAllocator-Hpp
 CPMAddPackage(
-  NAME VulkanMemoryAllocatorHpp # Name for CPM to track the package
+  NAME VulkanMemoryAllocatorHpp
   GITHUB_REPOSITORY YaaZ/VulkanMemoryAllocator-Hpp
-  GIT_TAG v3.2.1 # Use a specific version tag, v3.0.1 is a stable release
-  # This package provides an interface library target 'VulkanMemoryAllocator-hpp'
+  GIT_TAG v3.2.1
+  PATCHES "${CMAKE_CURRENT_SOURCE_DIR}/patches/vk_mem_alloc.patch"
 )
 
 add_library(AppModule)
@@ -57,25 +69,32 @@ target_compile_definitions(AppModule PRIVATE
     VULKAN_HPP_NO_SMART_HANDLE
     VULKAN_HPP_NO_EXCEPTIONS
     VULKAN_HPP_NO_CONSTRUCTORS
-    # VULKAN_HPP_STD_MODULE std
-    # VULKAN_HPP_ENABLE_STD_MODULE
     VK_USE_PLATFORM_WAYLAND_KHR
     VMA_BUILD_CXX_MODULE
-    SDL_MAIN_HANDLED  # Prevent SDL from overriding main()
-    # VMA_ENABLE_STD_MODULE
-    # APP_USE_UNLIMITED_FRAME_RATE
+    SDL_MAIN_HANDLED
+    BS_THREAD_POOL_IMPORT_STD
+    XXHASH_BUILD_XXHSUM OFF
+    BUILD_SHARED_LIBS OFF
+    "$<IF:$<CONFIG:Debug>,ENABLE_VALIDATION=1,ENABLE_VALIDATION=0>"
 )
+
+add_subdirectory(${xxHash_SOURCE_DIR}/build/cmake/ xxhash_build EXCLUDE_FROM_ALL)
 
 target_sources(AppModule
     PUBLIC
         FILE_SET CXX_MODULES
-        BASE_DIRS ${Vulkan_INCLUDE_DIR} src ${VulkanMemoryAllocatorHpp_SOURCE_DIR}
+        BASE_DIRS
+            src
+            ${Vulkan_INCLUDE_DIR}
+            ${VulkanMemoryAllocatorHpp_SOURCE_DIR}
+            ${bsThreadPool_SOURCE_DIR}
         FILES
         ${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm
         ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/src/vk_mem_alloc.cppm
+        ${bsThreadPool_SOURCE_DIR}/modules/BS.thread_pool.cppm
         src/tinygltf_module_wrapper.cppm
         src/app.cppm
-        src/extra.cppm
+        src/utils.cppm
         src/VulkanWindow.cppm
         src/VulkanDevice.cppm
         src/VulkanInstance.cppm
@@ -89,7 +108,6 @@ target_sources(AppModule
         src/texture.cppm
         src/TextureStore.cppm
         src/imgui.cppm
-        src/Logger.cppm
 )
 
 target_sources(AppModule
@@ -109,20 +127,16 @@ target_include_directories(AppModule PRIVATE
   ${imgui_SOURCE_DIR}/backends
   ${tinygltf_SOURCE_DIR}
   ${SDL3_INCLUDE_DIRS}
-  # VulkanMemoryAllocator-hpp is an interface library, so its include directories
-  # will be propagated automatically when linking.
-  # If VulkanMemoryAllocatorHpp_SOURCE_DIR was needed (e.g. for DOWNLOAD_ONLY):
   ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/VulkanMemoryAllocator/include
   ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/include
+  ${bsThreadPool_SOURCE_DIR}/include
 )
 
 target_link_libraries(AppModule PRIVATE
     SDL3::SDL3
     Vulkan::Vulkan
     tinygltf
-    # GPUOpen::VulkanMemoryAllocator
-    # VulkanMemoryAllocator-Hpp::VulkanMemoryAllocator-Hpp
-    # VulkanMemoryAllocator-Hpp-Module
+    xxHash::xxhash
 )
 
 add_executable(${PROJECT_NAME}

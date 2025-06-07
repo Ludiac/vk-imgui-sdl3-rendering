@@ -10,8 +10,11 @@ export module vulkan_app:VulkanInstance;
 import vulkan_hpp;
 import std;
 
+namespace {
+constexpr bool enable_validation_layers = ENABLE_VALIDATION;
 constexpr const char *validationLayerName = "VK_LAYER_KHRONOS_validation";
 constexpr std::array layers = {validationLayerName};
+} // namespace
 
 vk::Bool32 debugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                          vk::DebugUtilsMessageTypeFlagsEXT messageType,
@@ -52,6 +55,9 @@ public:
   operator const vk::raii::Instance &() const { return instance; }
 
   [[nodiscard]] std::expected<void, std::string> setupDebugMessenger() {
+    if constexpr (!enable_validation_layers) {
+      return {};
+    }
     if (auto expected = instance.createDebugUtilsMessengerEXT({
             .messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
                                vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
@@ -72,7 +78,7 @@ public:
 
   [[nodiscard]] std::expected<void, std::string> create() {
     vk::raii::Context context;
-    if constexpr (!NDEBUG) {
+    if constexpr (enable_validation_layers) {
       if (!checkValidationLayerSupport(context)) {
         return std::unexpected("Validation layers requested but not available!");
       }
@@ -107,7 +113,7 @@ public:
     extensions.push_back(vk::KHRXcbSurfaceExtensionName);
 #endif
 
-    if constexpr (!NDEBUG) {
+    if constexpr (enable_validation_layers) {
       extensions.push_back(vk::EXTDebugUtilsExtensionName);
     }
 
@@ -117,7 +123,7 @@ public:
         .ppEnabledExtensionNames = extensions.data(),
     };
 
-    if constexpr (!NDEBUG) {
+    if constexpr (!enable_validation_layers) {
       createInfo.enabledLayerCount = static_cast<u32>(layers.size());
       createInfo.ppEnabledLayerNames = layers.data();
     }

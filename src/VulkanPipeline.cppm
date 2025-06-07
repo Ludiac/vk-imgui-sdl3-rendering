@@ -9,7 +9,7 @@ import :Types;
 import vulkan_hpp;
 import std;
 
-[[nodiscard]] std::expected<std::vector<uint32_t>, std::string>
+[[nodiscard]] std::expected<std::vector<u32>, std::string>
 readSpirvFile(const std::string &filename) NOEXCEPT {
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
   if (!file.is_open()) {
@@ -21,7 +21,7 @@ readSpirvFile(const std::string &filename) NOEXCEPT {
     file.close();
     return std::unexpected("File is empty: " + filename);
   }
-  std::vector<uint32_t> buffer(fileSize / sizeof(uint32_t));
+  std::vector<u32> buffer(fileSize / sizeof(u32));
 
   file.seekg(0);
   file.read(reinterpret_cast<char *>(buffer.data()), fileSize);
@@ -31,13 +31,12 @@ readSpirvFile(const std::string &filename) NOEXCEPT {
 }
 
 [[nodiscard]] std::expected<vk::raii::ShaderModule, std::string>
-createShaderModule(const vk::raii::Device &device,
-                   const std::vector<uint32_t> &spirvCode) NOEXCEPT {
+createShaderModule(const vk::raii::Device &device, const std::vector<u32> &spirvCode) NOEXCEPT {
   if (spirvCode.empty()) {
     return std::unexpected("Cannot create shader module from empty SPIR-V code.");
   }
   auto createInfo = vk::ShaderModuleCreateInfo{
-      .codeSize = spirvCode.size() * sizeof(uint32_t),
+      .codeSize = spirvCode.size() * sizeof(u32),
       .pCode = spirvCode.data(),
   };
   auto shaderModuleResult = device.createShaderModule(createInfo);
@@ -79,12 +78,12 @@ export struct VulkanPipeline {
     return {};
   }
 
-  [[nodiscard]] std::expected<void, std::string> createGraphicsPipeline(
-      const vk::raii::Device &device,
-      const vk::raii::PipelineCache &pipelineCache, // Can be nullptr if not using a cache
-      std::vector<vk::PipelineShaderStageCreateInfo> shaderStages,
-      vk::PipelineInputAssemblyStateCreateInfo inputAssembly,
-      const vk::raii::RenderPass &renderPass) NOEXCEPT {
+  [[nodiscard]] std::expected<void, std::string>
+  createGraphicsPipeline(const vk::raii::Device &device,
+                         const vk::raii::PipelineCache &pipelineCache,
+                         std::vector<vk::PipelineShaderStageCreateInfo> shaderStages,
+                         vk::PipelineInputAssemblyStateCreateInfo inputAssembly,
+                         const vk::raii::RenderPass &renderPass) NOEXCEPT {
     vk::VertexInputBindingDescription bindingDescription{
         .binding = 0,
         .stride = sizeof(Vertex),
@@ -101,7 +100,7 @@ export struct VulkanPipeline {
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
         .vertexBindingDescriptionCount = 1,
         .pVertexBindingDescriptions = &bindingDescription,
-        .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributes.size()),
+        .vertexAttributeDescriptionCount = static_cast<u32>(attributes.size()),
         .pVertexAttributeDescriptions = attributes.data(),
     };
 
@@ -114,9 +113,9 @@ export struct VulkanPipeline {
         .depthClampEnable = false,        // Usually false
         .rasterizerDiscardEnable = false, // Usually false
         .polygonMode = vk::PolygonMode::eFill,
-        .cullMode = vk::CullModeFlagBits::eBack, // Enable backface culling
-        .frontFace = vk::FrontFace::eClockwise,  // Standard for Vulkan (adjust if your
-                                                 // vertices are CW)
+        .cullMode = vk::CullModeFlagBits::eBack,
+        .frontFace = vk::FrontFace::eClockwise,
+
         .depthBiasEnable = false,
         .lineWidth = 1.0f,
     };
@@ -126,17 +125,14 @@ export struct VulkanPipeline {
         .sampleShadingEnable = false,
     };
 
-    // *** ADD THIS SECTION FOR DEPTH TESTING ***
     vk::PipelineDepthStencilStateCreateInfo depthStencilState{
         .depthTestEnable = true,
         .depthWriteEnable = true,
-        .depthCompareOp = vk::CompareOp::eLess, // Fragments with smaller depth pass
+        .depthCompareOp = vk::CompareOp::eLess,
         .depthBoundsTestEnable = false,
-        .stencilTestEnable = false, // Assuming no stencil test for now
-                                    // .minDepthBounds = 0.0f, // Optional
-                                    // .maxDepthBounds = 1.0f, // Optional
+        .stencilTestEnable = false,
+
     };
-    // *** END OF DEPTH TESTING SECTION ***
 
     vk::PipelineColorBlendAttachmentState colorBlendAttachment{
         .blendEnable = false, // No blending for opaque objects initially
@@ -156,23 +152,23 @@ export struct VulkanPipeline {
     };
 
     vk::PipelineDynamicStateCreateInfo dynamicState{
-        .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+        .dynamicStateCount = static_cast<u32>(dynamicStates.size()),
         .pDynamicStates = dynamicStates.data(),
     };
 
     vk::GraphicsPipelineCreateInfo pipelineInfo{
-        .stageCount = static_cast<uint32_t>(shaderStages.size()),
+        .stageCount = static_cast<u32>(shaderStages.size()),
         .pStages = shaderStages.data(),
         .pVertexInputState = &vertexInputInfo,
         .pInputAssemblyState = &inputAssembly,
         .pViewportState = &viewportState,
         .pRasterizationState = &rasterizer,
         .pMultisampleState = &multisampling,
-        .pDepthStencilState = &depthStencilState, // *** SET THE POINTER HERE ***
+        .pDepthStencilState = &depthStencilState,
         .pColorBlendState = &colorBlending,
         .pDynamicState = &dynamicState,
         .layout = *pipelineLayout,
-        .renderPass = renderPass, // Ensure this renderPass has a depth attachment
+        .renderPass = renderPass,
         .subpass = 0,
     };
 

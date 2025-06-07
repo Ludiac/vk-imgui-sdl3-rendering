@@ -25,20 +25,19 @@ export struct UniformBufferObject {
   glm::mat4 model;
   glm::mat4 view;
   glm::mat4 projection;
+  glm::mat3 normalMatrix;
 };
 
 export struct Transform {
   glm::vec3 translation{0.0f};
   glm::vec3 scale{1.0f};
-  glm::quat rotation{glm::identity<glm::quat>()}; // Store rotation as a quaternion
+  glm::quat rotation{glm::identity<glm::quat>()};
 
-  // Optional: For continuous rotation, applied in update()
-  glm::vec3 rotation_speed_euler_dps{0.0f}; // Euler angles in degrees per second for rotation speed
+  glm::vec3 rotation_speed_euler_dps{0.0f};
 
-  // Updates transform based on time (e.g., for rotation_speed)
   void update(float delta_time) {
     if (glm::length(rotation_speed_euler_dps) > 0.0f) {
-      // Convert degrees per second to radians per delta_time
+
       glm::vec3 angular_change_rad = glm::radians(rotation_speed_euler_dps) * delta_time;
 
       // Create a delta quaternion from Euler angles
@@ -47,30 +46,24 @@ export struct Transform {
       glm::quat delta_rotation =
           glm::quat(glm::vec3(angular_change_rad.x, angular_change_rad.y, angular_change_rad.z));
 
-      rotation =
-          delta_rotation * rotation;       // Apply delta rotation (pre-multiply for local rotation)
+      rotation = delta_rotation * rotation;
       rotation = glm::normalize(rotation); // Normalize quaternion to prevent drift
     }
   }
 
-  // Composes and returns the transformation matrix
   [[nodiscard]] glm::mat4 getMatrix() const {
     glm::mat4 trans_matrix = glm::translate(glm::mat4(1.0f), translation);
     glm::mat4 rot_matrix = glm::mat4_cast(rotation);
     glm::mat4 scale_matrix = glm::scale(glm::mat4(1.0f), scale);
 
-    // Common order: Translate * Rotate * Scale (TRS)
-    // This means scale is applied first to local coordinates, then rotation, then translation.
     return trans_matrix * rot_matrix * scale_matrix;
   }
 
-  // Optional: If you need to set Euler angles and convert to quaternion
   void setRotationEuler(const glm::vec3 &euler_angles_degrees) {
     rotation = glm::quat(glm::radians(euler_angles_degrees));
     rotation = glm::normalize(rotation);
   }
 
-  // Optional: If you need to get Euler angles from quaternion (for display/debug)
   [[nodiscard]] glm::vec3 getRotationEulerDegrees() const {
     return glm::degrees(glm::eulerAngles(rotation));
   }
@@ -78,19 +71,16 @@ export struct Transform {
 
 export [[nodiscard]] Transform decomposeFromMatrix(const glm::mat4 &matrix) {
   Transform t;
-  glm::vec3 skew;        // Not typically used from GLTF but glm::decompose provides it
-  glm::vec4 perspective; // Not typically used for TRS but glm::decompose provides it
+  glm::vec3 skew;
+  glm::vec4 perspective;
 
   if (glm::decompose(matrix, t.scale, t.rotation, t.translation, skew, perspective)) {
-    // t.rotation is already a quaternion, directly usable.
-    // t.translation and t.scale are also directly usable.
-    // rotation_speed_euler_dps remains at its default (0,0,0)
+
   } else {
-    // Decomposition failed (e.g., matrix was degenerate or non-invertible).
-    // Return a default (identity) transform or handle error as appropriate.
+
     std::println("Warning: Matrix decomposition failed in Transform::decomposeFromMatrix. "
                  "Returning default transform.");
-    return Transform{}; // Default constructor gives identity-like transform
+    return Transform{};
   }
   return t;
 }

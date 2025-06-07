@@ -11,7 +11,7 @@ module;
 export module vulkan_app:ModelLoader;
 
 import std;
-import :extra;
+import :utils;
 import :mesh;
 import :texture;
 import :tinygltf;
@@ -19,7 +19,7 @@ import :tinygltf;
 // Structure to hold data for a single GLTF primitive
 export struct GltfPrimitiveData {
   std::vector<Vertex> vertices;
-  std::vector<uint32_t> indices;
+  std::vector<u32> indices;
   Material material;
 
   // Store the GLTF texture index for the base color map. -1 if not present.
@@ -112,7 +112,7 @@ getAccessorData(const gltfm::Model &model, int accessorIndex) {
   return data;
 }
 
-[[nodiscard]] std::expected<std::vector<uint32_t>, std::string>
+[[nodiscard]] std::expected<std::vector<u32>, std::string>
 getIndexAccessorData(const gltfm::Model &model, int accessorIndex) {
   if (accessorIndex < 0 || static_cast<size_t>(accessorIndex) >= model.accessors.size())
     return std::unexpected("Index accessor index out of bounds.");
@@ -123,7 +123,7 @@ getIndexAccessorData(const gltfm::Model &model, int accessorIndex) {
   const gltfm::Buffer &buffer = model.buffers[bufferView.buffer];
   const unsigned char *bufferData =
       buffer.data.data() + bufferView.byteOffset + accessor.byteOffset;
-  std::vector<uint32_t> indices(accessor.count);
+  std::vector<u32> indices(accessor.count);
   size_t stride = accessor.ByteStride(bufferView);
   if (stride == 0)
     stride = gltfm::GetComponentSizeInBytes(accessor.componentType);
@@ -131,17 +131,17 @@ getIndexAccessorData(const gltfm::Model &model, int accessorIndex) {
   for (size_t i = 0; i < accessor.count; ++i) {
     const unsigned char *elementData = bufferData + (i * stride);
     if (accessor.componentType == gltfm::COMPONENT_TYPE_UNSIGNED_INT) {
-      uint32_t val;
-      std::memcpy(&val, elementData, sizeof(uint32_t));
+      u32 val;
+      std::memcpy(&val, elementData, sizeof(u32));
       indices[i] = val;
     } else if (accessor.componentType == gltfm::COMPONENT_TYPE_UNSIGNED_SHORT) {
       uint16_t val;
       std::memcpy(&val, elementData, sizeof(uint16_t));
-      indices[i] = static_cast<uint32_t>(val);
+      indices[i] = static_cast<u32>(val);
     } else if (accessor.componentType == gltfm::COMPONENT_TYPE_UNSIGNED_BYTE) {
       uint8_t val;
       std::memcpy(&val, elementData, sizeof(uint8_t));
-      indices[i] = static_cast<uint32_t>(val);
+      indices[i] = static_cast<u32>(val);
     } else {
       return std::unexpected("Unsupported index component type.");
     }

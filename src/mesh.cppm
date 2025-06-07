@@ -10,19 +10,20 @@ import std;
 import :VulkanDevice;
 import :texture;
 import :VulkanPipeline;
+
 export class Mesh {
 public:
   std::string name;
   Material material;
   PBRTextures textures;
-  uint32_t indexCount{0};
+  u32 indexCount{0};
 
 private:
   VulkanDevice &device_;
   u32 imageCount_member;
 
   std::vector<Vertex> vertices_data;
-  std::vector<uint32_t> indices_data;
+  std::vector<u32> indices_data;
 
   VmaBuffer vertexBuffer;
   VmaBuffer indexBuffer;
@@ -36,15 +37,15 @@ private:
       return {};
     const auto bufferSize = sizeof(Vertex) * vertices_data.size();
 
-    vk::BufferCreateInfo bufferInfo{
-        .size = bufferSize, .usage = vk::BufferUsageFlagBits::eVertexBuffer
-        // .sharingMode = vk::SharingMode::eExclusive (default)
+    vk::BufferCreateInfo bufferInfo{.size = bufferSize,
+                                    .usage = vk::BufferUsageFlagBits::eVertexBuffer
+
     };
     vma::AllocationCreateInfo allocInfo{
         .flags = vma::AllocationCreateFlagBits::eHostAccessSequentialWrite |
-                 vma::AllocationCreateFlagBits::eMapped, // For easy CPU write & map
-        .usage = vma::MemoryUsage::eAutoPreferHost // VMA_MEMORY_USAGE_CPU_TO_GPU is common for
-                                                   // staging/dynamic vertex
+                 vma::AllocationCreateFlagBits::eMapped,
+        .usage = vma::MemoryUsage::eAutoPreferHost
+
     };
 
     auto bufferResult = device_.createBufferVMA(bufferInfo, allocInfo);
@@ -57,9 +58,7 @@ private:
       return std::unexpected("Mesh '" + name + "': Vertex VmaBuffer not mapped after creation.");
 
     std::memcpy(vertexBuffer.getMappedData(), vertices_data.data(), bufferSize);
-    // No explicit unmap needed if eMapped was used and it's persistently mapped by VMA for its
-    // lifetime. If not persistently mapped, or if you want to flush:
-    // device_.getAllocator().flushAllocation(vertexVmaBuffer.getAllocation(), 0, bufferSize);
+
     return {};
   }
 
@@ -68,8 +67,8 @@ private:
       this->indexCount = 0;
       return {};
     }
-    this->indexCount = static_cast<uint32_t>(indices_data.size());
-    const auto bufferSize = sizeof(uint32_t) * indices_data.size();
+    this->indexCount = static_cast<u32>(indices_data.size());
+    const auto bufferSize = sizeof(u32) * indices_data.size();
 
     vk::BufferCreateInfo bufferInfo{.size = bufferSize,
                                     .usage = vk::BufferUsageFlagBits::eIndexBuffer};
@@ -100,9 +99,8 @@ private:
                                     .usage = vk::BufferUsageFlagBits::eUniformBuffer};
     vma::AllocationCreateInfo allocInfo{
         .flags = vma::AllocationCreateFlagBits::eHostAccessSequentialWrite |
-                 vma::AllocationCreateFlagBits::eMapped, // Persistently mapped
-        .usage = vma::MemoryUsage::eAutoPreferHost       // CPU writes, GPU reads
-    };
+                 vma::AllocationCreateFlagBits::eMapped,
+        .usage = vma::MemoryUsage::eAutoPreferHost};
     auto bufferResult = device_.createBufferVMA(bufferInfo, allocInfo);
     if (!bufferResult)
       return std::unexpected("Mesh '" + name +
@@ -132,7 +130,7 @@ private:
                              "': Material UBO VmaBuffer creation: " + bufferResult.error());
     materialUniformBuffer = std::move(bufferResult.value());
 
-    for (uint32_t i = 0; i < imageCount_member; ++i) {
+    for (u32 i = 0; i < imageCount_member; ++i) {
       updateMaterialUniformBufferData(i);
     }
     return {};
@@ -140,7 +138,7 @@ private:
 
 public:
   Mesh(VulkanDevice &dev, std::string meshName, std::vector<Vertex> &&verts,
-       std::vector<uint32_t> &&meshIndices, Material initMaterial, PBRTextures initPbrTextures,
+       std::vector<u32> &&meshIndices, Material initMaterial, PBRTextures initPbrTextures,
        u32 numImages)
       : device_(dev), name(std::move(meshName)), material(std::move(initMaterial)),
         textures(std::move(initPbrTextures)), imageCount_member(numImages),
@@ -151,7 +149,7 @@ public:
     EXPECTED_VOID(createSingleMaterialUniformBuffer());
   }
 
-  void updateMaterialUniformBufferData(uint32_t currentImage) {
+  void updateMaterialUniformBufferData(u32 currentImage) {
     if (!materialUniformBuffer || currentImage >= imageCount_member)
       return;
     if (!materialUniformBuffer.getMappedData()) {
@@ -164,11 +162,9 @@ public:
     vk::DeviceSize offset = currentImage * alignedMaterialSize;
     char *baseMapped = static_cast<char *>(materialUniformBuffer.getMappedData());
     std::memcpy(baseMapped + offset, &this->material, sizeof(Material));
-    // device_.getAllocator().flushAllocation(materialVmaUniformBuffer.getAllocation(), offset,
-    // sizeof(Material)); // If not host coherent
   }
 
-  void updateMvpUniformBuffer(uint32_t currentImage, const glm::mat4 &model, const glm::mat4 &view,
+  void updateMvpUniformBuffer(u32 currentImage, const glm::mat4 &model, const glm::mat4 &view,
                               const glm::mat4 &projection) {
     if (!mvpUniformBuffers || currentImage >= imageCount_member)
       return;
@@ -180,11 +176,10 @@ public:
     ubo.model = model;
     ubo.view = view;
     ubo.projection = projection;
+    ubo.normalMatrix = glm::transpose(glm::inverse(glm::mat3(ubo.model)));
     vk::DeviceSize offset = sizeof(UniformBufferObject) * currentImage;
     char *baseMapped = static_cast<char *>(mvpUniformBuffers.getMappedData());
     std::memcpy(baseMapped + offset, &ubo, sizeof(ubo));
-    // device_.getAllocator().flushAllocation(mvpVmaUniformBuffers.getAllocation(), offset,
-    // sizeof(ubo)); // If not host coherent
   }
 
   [[nodiscard]] std::expected<void, std::string>
@@ -304,14 +299,16 @@ public:
     } else {
     }
   }
-  [[nodiscard]] std::expected<void, std::string> setImageCount(u32 newCount) NOEXCEPT {
+  [[nodiscard]] std::expected<void, std::string>
+  setImageCount(u32 newCount, const vk::raii::DescriptorPool &pool,
+                const vk::raii::DescriptorSetLayout &layout) NOEXCEPT {
     if (newCount == imageCount_member) {
       return {};
     }
     imageCount_member = newCount;
     EXPECTED_VOID(createMvpUniformBuffers());
     EXPECTED_VOID(createSingleMaterialUniformBuffer());
-    descriptorSets.clear();
+    EXPECTED_VOID(allocateDescriptorSets(pool, layout));
     return {};
   }
   Material &getMaterial() { return material; }

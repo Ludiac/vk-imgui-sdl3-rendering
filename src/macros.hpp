@@ -14,7 +14,3 @@
 #else
 #define NOEXCEPT
 #endif
-
-#ifndef NDEBUG
-#define NDEBUG 1
-#endif

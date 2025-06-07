@@ -14,12 +14,13 @@ export module vulkan_app;
 
 import vulkan_hpp;
 import std;
+import BS.thread_pool;
 
 import :VulkanWindow;
 import :VulkanDevice;
 import :VulkanInstance;
 import :VulkanPipeline;
-import :extra;        // For Vertex, Material, UniformBufferObject, Transform, Camera
+import :utils;        // For Vertex, Material, UniformBufferObject, Transform, Camera
 import :mesh;         // For Mesh (refactored version)
 import :scene;        // For Scene, SceneNode, SceneNodeCreateInfo (refactored version)
 import :texture;      // For Texture, PBRTextures
@@ -27,10 +28,9 @@ import :TextureStore; // For managing textures
 import :ModelLoader;  // Not used in this hardcoded example, but for future
 import :SceneBuilder; // Not used in this hardcoded example, but for future
 import :imgui;        // For ImGui helper functions
-import :Logger;       // For ImGui helper functions
 
-namespace {                             // Anonymous namespace for internal linkage
-constexpr uint32_t MIN_IMAGE_COUNT = 2; // Renamed from minImageCount to avoid conflict
+namespace {                        // Anonymous namespace for internal linkage
+constexpr u32 MIN_IMAGE_COUNT = 2; // Renamed from minImageCount to avoid conflict
 
 // Helper to create vertices for a single quad (face of a cube)
 // Normal points outwards. UVs cover the quad. Tangent is basic.
@@ -54,7 +54,7 @@ std::vector<Vertex> createQuadVertices(float size, const glm::vec3 &normal, cons
   };
 }
 // Indices for a quad (two triangles, CCW)
-std::vector<uint32_t> createQuadIndices() { return {0, 1, 2, 2, 3, 0}; }
+std::vector<u32> createQuadIndices() { return {0, 1, 2, 2, 3, 0}; }
 
 std::vector<Vertex> createAxisLineVertices(const glm::vec3 &start, const glm::vec3 &end,
                                            const glm::vec3 &normal_placeholder) {
@@ -63,7 +63,7 @@ std::vector<Vertex> createAxisLineVertices(const glm::vec3 &start, const glm::ve
   return {{start, normal_placeholder, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
           {end, normal_placeholder, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}};
 }
-std::vector<uint32_t> createAxisLineIndices() {
+std::vector<u32> createAxisLineIndices() {
   return {0, 1}; // A single line segment
 }
 } // anonymous namespace
@@ -106,6 +106,10 @@ export class App {
 
   Camera camera;
 
+  BS::thread_pool<> thread_pool;
+  std::vector<LoadedGltfScene> loadedGltfData;
+  std::mutex loadedGltfDataMutex;
+
 public:
   // Create the single combined descriptor set layout for meshes
   std::expected<void, std::string> createCombinedMeshDescriptorSetLayout() NOEXCEPT {
@@ -131,7 +135,7 @@ public:
     };
 
     vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount =
-                                                     static_cast<uint32_t>(meshDataBindings.size()),
+                                                     static_cast<u32>(meshDataBindings.size()),
                                                  .pBindings = meshDataBindings.data()};
 
     auto layoutResult = device.logical().createDescriptorSetLayout(layoutInfo);
@@ -190,82 +194,6 @@ public:
                                                       lineInputAssembly, wd.RenderPass));
   }
 
-  void createTexturedCubeScene(u32 currentImageCount) {
-
-    // if (textureStore) {
-    //
-    //   std::println("Error: TextureStore not initialized in createTexturedCubeScene.");
-    //   return;
-    // }
-    if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
-
-      std::println("Error: Default graphics pipeline not ready for createTexturedCubeScene.");
-      return;
-    }
-    VulkanPipeline *defaultPipeline = &graphicsPipelines[0];
-
-    SceneNode *cubeRootNode = scene.createNode(
-        {.transform = Transform{}, .pipeline = defaultPipeline, .name = "CubeRoot"});
-    if (!cubeRootNode) {
-      return;
-    }
-
-    float cubeSize = 10.0f;
-
-    std::array<std::shared_ptr<Texture>, 6> faceTextures = {
-        textureStore.getColorTexture("red", {255, 0, 0, 255}),
-        textureStore.getColorTexture("green", {0, 255, 0, 255}),
-        textureStore.getColorTexture("blue", {0, 0, 255, 255}),
-        textureStore.getColorTexture("yellow", {255, 255, 0, 255}),
-        textureStore.getColorTexture("cyan", {0, 255, 255, 255}),
-        textureStore.getColorTexture("magenta", {255, 0, 255, 255})};
-
-    struct FaceDef {
-      std::string name;
-      glm::vec3 normal;
-      glm::vec3 up;
-      glm::vec3 right;
-      glm::vec3 translation;
-      std::shared_ptr<Texture> texture;
-    };
-
-    std::vector<FaceDef> faceDefs = {
-        {"FrontFace", {0, 0, -1}, {0, 1, 0}, {1, 0, 0}, {0, 0, -cubeSize / 2.0f}, faceTextures[0]},
-        {"BackFace", {0, 0, 1}, {0, 1, 0}, {-1, 0, 0}, {0, 0, cubeSize / 2.0f}, faceTextures[1]},
-        {"LeftFace", {-1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {-cubeSize / 2.0f, 0, 0}, faceTextures[2]},
-        {"RightFace", {1, 0, 0}, {0, 1, 0}, {0, 0, -1}, {cubeSize / 2.0f, 0, 0}, faceTextures[3]},
-        {"TopFace", {0, 1, 0}, {0, 0, -1}, {1, 0, 0}, {0, cubeSize / 2.0f, 0}, faceTextures[4]},
-        {"BottomFace", {0, -1, 0}, {0, 0, 1}, {1, 0, 0}, {0, -cubeSize / 2.f, 0}, faceTextures[5]}};
-
-    for (const auto &def : faceDefs) {
-      std::vector<Vertex> faceVertices =
-          createQuadVertices(cubeSize, def.normal, def.up, def.right);
-      std::vector<uint32_t> faceIndices = createQuadIndices();
-      Material faceMaterial;
-      faceMaterial.baseColorFactor = glm::vec4(1.0f);
-      PBRTextures facePbrTextures;
-      facePbrTextures.baseColor = def.texture ? def.texture : textureStore.getDefaultTexture();
-      auto faceMesh =
-          std::make_unique<Mesh>(device, def.name, std::move(faceVertices), std::move(faceIndices),
-                                 faceMaterial, facePbrTextures, currentImageCount);
-      Mesh *faceMeshPtr = faceMesh.get();
-      appOwnedMeshes.emplace_back(std::move(faceMesh));
-      Transform faceTransform;
-      faceTransform.translation = def.translation;
-      SceneNode *faceNode = scene.createNode({.mesh = faceMeshPtr,
-                                              .transform = faceTransform,
-                                              .pipeline = defaultPipeline,
-                                              .parent = cubeRootNode,
-                                              .name = def.name + "_Node"});
-      if (!faceNode) {
-      } else {
-      }
-    }
-    if (cubeRootNode) {
-      cubeRootNode->transform.rotation_speed_euler_dps = {10.f, 15.f, 5.f};
-    }
-  }
-
   void createDebugAxesScene(u32 currentImageCount) {
     if (graphicsPipelines.size() < 2 || !*graphicsPipelines[1].pipeline) {
       std::println(
@@ -278,42 +206,44 @@ public:
     // X-Axis (Red)
     Material xAxisMaterial;
     PBRTextures xAxisTextures;
-    xAxisTextures.baseColor = textureStore.getColorTexture("white", {255, 0, 0, 255});
+    xAxisTextures.baseColor = textureStore.getColorTexture({255, 0, 0, 255});
     auto xAxisMesh = std::make_unique<Mesh>(
         device, "X_Axis",
         createAxisLineVertices({-axisLength, 0, 0}, {axisLength, 0, 0}, {0, 1, 0}),
         createAxisLineIndices(), xAxisMaterial, xAxisTextures, currentImageCount);
     appOwnedMeshes.emplace_back(std::move(xAxisMesh));
     scene.createNode(
-        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "X_Axis_Node"});
+        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "X_Axis_Node"},
+        device.descriptorPool_, combinedMeshLayout);
 
     // Y-Axis (Green)
     Material yAxisMaterial;
     PBRTextures yAxisTextures;
-    yAxisTextures.baseColor = textureStore.getColorTexture("green", {0, 255, 0, 255});
+    yAxisTextures.baseColor = textureStore.getColorTexture({0, 255, 0, 255});
     auto yAxisMesh = std::make_unique<Mesh>(
         device, "Y_Axis",
         createAxisLineVertices({0, -axisLength, 0}, {0, axisLength, 0}, {1, 0, 0}),
         createAxisLineIndices(), yAxisMaterial, yAxisTextures, currentImageCount);
     appOwnedMeshes.emplace_back(std::move(yAxisMesh));
     scene.createNode(
-        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "Y_Axis_Node"});
+        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "Y_Axis_Node"},
+        device.descriptorPool_, combinedMeshLayout);
 
     // Z-Axis (Blue)
     Material zAxisMaterial;
     PBRTextures zAxisTextures;
-    zAxisTextures.baseColor = textureStore.getColorTexture("blue", {0, 0, 255, 255});
+    zAxisTextures.baseColor = textureStore.getColorTexture({0, 0, 255, 255});
     auto zAxisMesh = std::make_unique<Mesh>(
         device, "Z_Axis",
         createAxisLineVertices({0, 0, -axisLength}, {0, 0, axisLength}, {1, 0, 0}),
         createAxisLineIndices(), zAxisMaterial, zAxisTextures, currentImageCount);
     appOwnedMeshes.emplace_back(std::move(zAxisMesh));
     scene.createNode(
-        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "Z_Axis_Node"});
+        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "Z_Axis_Node"},
+        device.descriptorPool_, combinedMeshLayout);
   }
 
-  void loadAndInstanceGltfModel(const std::string &filePath, const std::string &baseDir,
-                                u32 currentImageCount) {
+  void loadGltfModel(const std::string &filePath, const std::string &baseDir) {
     if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
       std::println("Error: Prerequisites not met for loading GLTF model '{}'.", filePath);
       return;
@@ -337,37 +267,39 @@ public:
       return;
     }
 
-    // Populate the main scene with data from GLTF
-    // This uses SceneBuilder.cppm
+    std::lock_guard lock{loadedGltfDataMutex};
+    loadedGltfData.emplace_back(*loadedGltfDataResult);
+  }
+
+  std::vector<LoadedGltfScene> stealLoadedScenes() {
+    std::vector<LoadedGltfScene> out;
+    {
+      std::lock_guard lock{loadedGltfDataMutex};
+      out = std::move(loadedGltfData);
+      loadedGltfData.clear();
+    }
+    return out;
+  }
+
+  void instanceGltfModel(const LoadedGltfScene &gltfData, u32 currentImageCount) {
     auto builtMeshesResult =
         populateSceneFromGltf(scene, gltfData, device, textureStore,
                               &graphicsPipelines[0], // Use the main mesh pipeline for GLTF models
-                              currentImageCount);
+                              currentImageCount, combinedMeshLayout);
 
     if (!builtMeshesResult) {
-      std::println("Failed to build engine scene from GLTF data for '{}': {}", filePath,
-                   builtMeshesResult.error());
+      std::println("Failed to build engine scene from GLTF data: {}", builtMeshesResult.error());
       return;
     }
 
-    // Take ownership of the meshes created by SceneBuilder
     for (auto &mesh_ptr : builtMeshesResult->engineMeshes) {
       appOwnedMeshes.emplace_back(std::move(mesh_ptr));
     }
-
-    std::println("Successfully processed and instanced GLTF model: {}", filePath);
-    // After this, the scene graph (this->scene) will contain nodes from the GLTF.
-    // Descriptor sets for these new meshes will need to be allocated and updated.
-    // This should ideally happen as part of a broader "scene finalized" step or before first
-    // render.
   }
 
   void SetupVulkan() {
-
     EXPECTED_VOID(instance.create());
-    if (!NDEBUG) {
-      EXPECTED_VOID(instance.setupDebugMessenger());
-    }
+    EXPECTED_VOID(instance.setupDebugMessenger());
     EXPECTED_VOID(device.pickPhysicalDevice());
     EXPECTED_VOID(device.createLogicalDevice());
     EXPECTED_VOID(createCombinedMeshDescriptorSetLayout());
@@ -415,9 +347,7 @@ public:
   }
 
   void FrameRender(ImDrawData *draw_data, float deltaTime) {
-
     if (!*wd.Swapchain) {
-
       return;
     }
 
@@ -432,7 +362,7 @@ public:
         .semaphore = image_acquired_semaphore,
         .deviceMask = 1,
     });
-    uint32_t imageIndex = imageIndexx;
+    u32 imageIndex = imageIndexx;
 
     if (acquireRes == vk::Result::eErrorOutOfDateKHR || acquireRes == vk::Result::eSuboptimalKHR) {
       swapChainRebuild = true;
@@ -471,7 +401,7 @@ public:
             .renderPass = *wd.RenderPass,
             .framebuffer = *currentFrame.Framebuffer,
             .renderArea = {.offset = {0, 0}, .extent = wd.config.swapchainExtent},
-            .clearValueCount = static_cast<uint32_t>(clearValues.size()),
+            .clearValueCount = static_cast<u32>(clearValues.size()),
             .pClearValues = clearValues.data()},
         vk::SubpassContents::eInline);
 
@@ -526,7 +456,7 @@ public:
   vk::Extent2D get_window_size(SDL_Window *window) {
     int w, h;
     SDL_GetWindowSize(window, &w, &h);
-    return {static_cast<uint32_t>(w > 0 ? w : 1), static_cast<uint32_t>(h > 0 ? h : 1)};
+    return {static_cast<u32>(w > 0 ? w : 1), static_cast<u32>(h > 0 ? h : 1)};
   }
 
   void ProcessKeyboard(Camera &cam, SDL_Scancode key, float dt) {
@@ -585,14 +515,12 @@ public:
         }
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
             event.window.windowID == SDL_GetWindowID(sdl_window)) {
-
           done = true;
         }
 
         if (event.type == SDL_EVENT_WINDOW_MINIMIZED) {
         }
         if (event.type == SDL_EVENT_WINDOW_RESTORED) {
-
           swapChainRebuild = true;
         }
         if (event.type == SDL_EVENT_WINDOW_RESIZED ||
@@ -600,37 +528,34 @@ public:
           swapChainRebuild = true;
         }
       }
+      auto newScenes = stealLoadedScenes();
+
+      for (auto &scene : newScenes) {
+        instanceGltfModel(scene, wd.Frames.size());
+      }
 
       updateCamera(deltaTime);
       camera.updateVectors();
 
       if (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_MINIMIZED) {
-
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
       }
 
       vk::Extent2D currentExtent = get_window_size(sdl_window);
       if (currentExtent.width == 0 || currentExtent.height == 0) {
-
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         continue;
       }
 
       if (swapChainRebuild || wd.config.swapchainExtent.width != currentExtent.width ||
           wd.config.swapchainExtent.height != currentExtent.height) {
-
         device.logical().waitIdle();
-
         createOrResizeWindow(instance, device, wd, currentExtent, MIN_IMAGE_COUNT);
-
-        scene.setImageCount(static_cast<u32>(wd.Frames.size()));
-
-        scene.allocateAllDescriptorSets(device.descriptorPool_, combinedMeshLayout);
-
-        for (u32 i = 0; i < wd.Frames.size(); ++i)
-          scene.updateAllDescriptorSetContents(i);
-
+        scene.setImageCount(static_cast<u32>(wd.Frames.size()), device.descriptorPool_,
+                            combinedMeshLayout);
+        // for (u32 i = 0; i < wd.Frames.size(); ++i)
+        //   scene.updateAllDescriptorSetContents(i);
         swapChainRebuild = false;
       }
 
@@ -640,6 +565,7 @@ public:
 
       {
         RenderCameraControlMenu(camera);
+        RenderVulkanStateWindow(device, wd, 120, deltaTime);
         RenderSceneHierarchyMaterialEditor(scene, wd.FrameIndex);
       }
 
@@ -667,13 +593,11 @@ public:
     scene = Scene(static_cast<u32>(wd.Frames.size()));
     // loadAndInstanceGltfModel("../assets/models/BoxVertexColors.gltf", "",
     //                          static_cast<u32>(wd.Frames.size()));
-    loadAndInstanceGltfModel("../assets/models/sphinx-3d-model/scene.gltf",
-                             "../assets/models/sphinx-3d-model/",
-                             static_cast<u32>(wd.Frames.size()));
-    // createTexturedCubeScene(static_cast<u32>(wd.Frames.size()));
+    auto future = thread_pool.submit_task([this] {
+      return loadGltfModel("../assets/models/sphinx-3d-model/scene.gltf",
+                           "../assets/models/sphinx-3d-model/");
+    });
     createDebugAxesScene(static_cast<u32>(wd.Frames.size()));
-
-    scene.allocateAllDescriptorSets(device.descriptorPool_, combinedMeshLayout);
 
     for (u32 i = 0; i < wd.Frames.size(); ++i)
       scene.updateAllDescriptorSetContents(i);
@@ -691,7 +615,7 @@ public:
     init_info.DescriptorPool = *device.descriptorPool_;
     init_info.RenderPass = *wd.RenderPass;
     init_info.MinImageCount = MIN_IMAGE_COUNT;
-    init_info.ImageCount = static_cast<uint32_t>(wd.Frames.size());
+    init_info.ImageCount = static_cast<u32>(wd.Frames.size());
     init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     init_info.PipelineCache = *pipelineCache;
     init_info.Subpass = 0;
@@ -709,7 +633,6 @@ public:
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
-    // reliably on crash
     return 0;
   }
 };

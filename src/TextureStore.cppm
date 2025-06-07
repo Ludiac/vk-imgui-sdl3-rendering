@@ -2,6 +2,7 @@ module;
 
 #include "macros.hpp"
 #include "primitive_types.hpp"
+#include <xxhash.h> // Include the xxHash header
 
 export module vulkan_app:TextureStore;
 
@@ -14,16 +15,18 @@ import :ModelLoader; // For GltfImageData
 export class TextureStore {
 private:
   VulkanDevice &device_;
-  vk::raii::CommandPool ownedCommandPool_{nullptr};
+  vk::raii::CommandPool commandPool_{nullptr};
   const vk::raii::Queue &transferQueue_;
 
-  std::map<std::string, std::shared_ptr<Texture>> loadedTextures_;
+  // The core change: Use a u32 hash as the key for our texture cache.
+  std::map<u32, std::shared_ptr<Texture>> loadedTextures_;
   std::shared_ptr<Texture> defaultWhiteTexture_;
 
 public:
-  [[nodiscard]] std::expected<void, std::string> createInternalCommandPool() { /* ... same ... */
+  [[nodiscard]] std::expected<void, std::string> createInternalCommandPool() {
     if (!*device_.logical() || device_.queueFamily_ == static_cast<u32>(-1))
       return std::unexpected("TS:createPool: Device/QF not init.");
+
     vk::CommandPoolCreateInfo poolInfo{.flags = vk::CommandPoolCreateFlagBits::eTransient |
                                                 vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
                                        .queueFamilyIndex = device_.queueFamily_};
@@ -31,14 +34,20 @@ public:
     if (!poolResult)
       return std::unexpected("TS:createPool: Pool creation failed: " +
                              vk::to_string(poolResult.error()));
-    ownedCommandPool_ = std::move(poolResult.value());
+    commandPool_ = std::move(poolResult.value());
 
-    auto defaultTexResult = createDefaultTexture(device_, ownedCommandPool_, transferQueue_,
-                                                 vk::Format::eR8G8B8A8Unorm, {255, 255, 255, 255});
-    if (defaultTexResult)
-      defaultWhiteTexture_ = std::make_shared<Texture>(std::move(*defaultTexResult));
-    else
-      std::println("CRITICAL: TS failed to create magenta default: {}", defaultTexResult.error());
+    // --- Create the default texture and add it to the cache ---
+    // As you mentioned, loading this from a file is a great idea for a real app.
+    // For now, we create a 1x1 white texture programmatically and let it be the first
+    // entry in our cache.
+    std::array<uint8_t, 4> whitePixel = {255, 255, 255, 255};
+    defaultWhiteTexture_ = getColorTexture(whitePixel); // This will hash and store it.
+
+    if (!defaultWhiteTexture_) {
+      // The getColorTexture method already prints errors, but we can add a critical one here.
+      std::println("CRITICAL: TextureStore failed to create the default white texture.");
+      return std::unexpected("Failed to create default white texture.");
+    }
 
     return {};
   }
@@ -46,91 +55,89 @@ public:
   TextureStore(VulkanDevice &device, const vk::raii::Queue &queue)
       : device_(device), transferQueue_(queue) {}
 
-  // Load texture from raw pixel data
-  [[nodiscard]] std::shared_ptr<Texture>
-  getTextureFromData(const std::string &cacheKey,    // Unique key for this texture data
-                     const GltfImageData &imageData) // Pass the struct from ModelLoader
-  {
-    if (!*ownedCommandPool_) {
+  // Load texture from raw pixel data using its hash as the key.
+  [[nodiscard]] std::shared_ptr<Texture> getTextureFromData(const GltfImageData &imageData) {
+    if (!*commandPool_) {
       std::println("TS::getTextureFromData: No command pool. Returning fallback default.");
       return defaultWhiteTexture_;
     }
     if (imageData.pixels.empty() || imageData.width == 0 || imageData.height == 0) {
-      std::println(
-          "TS::getTextureFromData: Invalid image data for key '{}'. Returning fallback default.",
-          cacheKey);
+      std::println("TS::getTextureFromData: Invalid image data. Returning fallback default.");
       return defaultWhiteTexture_;
     }
 
-    if (auto it = loadedTextures_.find(cacheKey); it != loadedTextures_.end()) {
-      return it->second;
+    // --- HASHING LOGIC ---
+    // Generate a 32-bit hash from the pixel data.
+    const u32 textureHash = XXH32(imageData.pixels.data(), imageData.pixels.size(), 0);
+
+    if (auto it = loadedTextures_.find(textureHash); it != loadedTextures_.end()) {
+      return it->second; // Texture already exists, return it.
     }
 
+    // --- FORMAT SELECTION (same as before) ---
     vk::Format format = vk::Format::eR8G8B8A8Unorm; // Default
     if (imageData.component == 4) {
       format = imageData.isSrgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
-    } else if (imageData.component == 3) {
-      // Vulkan often doesn't have great direct support for R8G8B8.
-      // It's common to convert to RGBA8 by adding an alpha channel.
-      // For now, let's assume if component is 3, we might need to handle it or expect RGBA.
-      // Or, if your createTexture can handle it (e.g. by reformatting during staging upload).
-      // Let's assume for now imageData.pixels is already RGBA if component is 3 for simplicity,
-      // or that createTexture will handle it.
-      // This is a common pain point. For now, assume RGBA8 if component is not 4.
-      std::println("Warning: Texture '{}' has {} components. Assuming RGBA for format selection.",
-                   cacheKey, imageData.component);
-      format = imageData.isSrgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
     } else {
-      std::println(
-          "Warning: Texture '{}' has unsupported component count {}. Using default format.",
-          cacheKey, imageData.component);
+      // Simplified logic: Warn if not 4 components, but proceed assuming the createTexture
+      // function or the data itself is prepared for an RGBA format. Proper handling
+      // for 3-component (RGB) images would typically involve converting them to RGBA
+      // before hashing and uploading.
+      std::println("Warning: Texture with hash {:#x} has {} components. Assuming RGBA for format.",
+                   textureHash, imageData.component);
+      format = imageData.isSrgb ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
     }
 
-    auto texResult = createTexture3( // This is your existing createTexture from vulkan_app:texture
+    // --- TEXTURE CREATION ---
+    auto texResult = createTexture( // This is your existing createTexture from vulkan_app:texture
         device_, imageData.pixels.data(), imageData.pixels.size(),
-        vk::Extent3D{static_cast<uint32_t>(imageData.width),
-                     static_cast<uint32_t>(imageData.height), 1},
-        format,
-        ownedCommandPool_, // Use owned pool
-        transferQueue_,
+        vk::Extent3D{static_cast<u32>(imageData.width), static_cast<u32>(imageData.height), 1},
+        format, commandPool_, transferQueue_,
         true // generateMipmaps
     );
 
     if (texResult) {
-      std::shared_ptr<Texture> newTexture = std::make_shared<Texture>(std::move(*texResult));
-      loadedTextures_[cacheKey] = newTexture;
-      std::println("TextureStore: Successfully created texture '{}' from data.", cacheKey);
+      auto newTexture = std::make_shared<Texture>(std::move(*texResult));
+      loadedTextures_[textureHash] = newTexture; // Store using the hash
+      std::println("TextureStore: Created new texture with hash {:#x}.", textureHash);
       return newTexture;
-    } else {
-      std::println(
-          "TextureStore: Failed to create texture '{}' from data: {}. Returning fallback default.",
-          cacheKey, texResult.error());
-      return defaultWhiteTexture_;
     }
+
+    std::println("TextureStore: Failed to create texture with hash {:#x}: {}. Returning fallback.",
+                 textureHash, texResult.error());
+    return defaultWhiteTexture_;
   }
 
+  // Get or create a solid-color texture. The key is now the hash of the color itself.
   [[nodiscard]] std::shared_ptr<Texture>
-  getColorTexture(const std::string &key, std::array<uint8_t, 4> color,
-                  vk::Format format = vk::Format::eR8G8B8A8Srgb) { /* ... same ... */
-    if (!*ownedCommandPool_)
+  getColorTexture(const std::array<uint8_t, 4> &color,
+                  vk::Format format = vk::Format::eR8G8B8A8Srgb) {
+    if (!*commandPool_)
       return defaultWhiteTexture_;
-    if (auto it = loadedTextures_.find(key); it != loadedTextures_.end())
+
+    // --- HASHING LOGIC for color ---
+    const u32 colorHash = XXH32(color.data(), color.size(), 0);
+
+    if (auto it = loadedTextures_.find(colorHash); it != loadedTextures_.end()) {
       return it->second;
-    auto texResult =
-        createDefaultTexture(device_, ownedCommandPool_, transferQueue_, format, color);
+    }
+
+    // Create a 1x1 texture for the solid color
+    auto texResult = createTexture(device_, color.data(), color.size(), {1, 1, 1}, format,
+                                   commandPool_, transferQueue_, false);
     if (texResult) {
       auto newTex = std::make_shared<Texture>(std::move(*texResult));
-      loadedTextures_[key] = newTex;
+      loadedTextures_[colorHash] = newTex;
       return newTex;
     }
-    std::println("TS: Failed to create color texture '{}': {}. Returning fallback.", key,
-                 texResult.error());
+    std::println("TS: Failed to create color texture with hash {:#x}: {}. Returning fallback.",
+                 colorHash, texResult.error());
     return defaultWhiteTexture_;
   }
 
   std::shared_ptr<Texture> getDefaultTexture() const { return defaultWhiteTexture_; }
 
-  ~TextureStore() = default; // RAII for ownedCommandPool_ and shared_ptrs
+  ~TextureStore() = default;
   TextureStore(const TextureStore &) = delete;
   TextureStore &operator=(const TextureStore &) = delete;
   TextureStore(TextureStore &&) = delete;
