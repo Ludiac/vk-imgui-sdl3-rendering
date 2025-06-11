@@ -43,33 +43,38 @@ populateSceneFromGltf(Scene &targetScene, const LoadedGltfScene &gltfData, Vulka
       Material engineMaterial = gltfPrimitive.material;
       PBRTextures enginePbrTextures;
 
-      // *** LOAD BASE COLOR TEXTURE FROM GLTF DATA ***
-      if (gltfPrimitive.baseColorTextureGltfIndex >= 0) {
-        // gltfPrimitive.baseColorTextureGltfIndex now stores the GLTF *image* index.
-        auto imageIt = gltfData.images.find(gltfPrimitive.baseColorTextureGltfIndex);
-        if (imageIt != gltfData.images.end()) {
-          const GltfImageData &loadedImgData = imageIt->second;
-          // Use image name or index as part of cache key
-          std::string textureCacheKey = "gltf_img_" +
-                                        std::to_string(gltfPrimitive.baseColorTextureGltfIndex) +
-                                        "_" + loadedImgData.name;
-          enginePbrTextures.baseColor = textureStore.getTextureFromData(loadedImgData);
-        } else {
-          std::println("Warning: GLTF material specified base color texture (image index {}), but "
-                       "image data not found in loadedScene.images.",
-                       gltfPrimitive.baseColorTextureGltfIndex);
-          enginePbrTextures.baseColor = textureStore.getDefaultTexture(); // Fallback
+      // Helper to load a texture from GLTF data or return a default
+      auto load_gltf_texture =
+          [&](int image_index, const std::string &texture_type_name,
+              std::shared_ptr<Texture> fallback_texture) -> std::shared_ptr<Texture> {
+        if (image_index >= 0) {
+          auto imageIt = gltfData.images.find(image_index);
+          if (imageIt != gltfData.images.end()) {
+            GltfImageData loadedImgData = imageIt->second;
+            // Ensure SRGB status is set correctly for color data
+            return textureStore.getTextureFromData(loadedImgData);
+          } else {
+            std::println("Warning: GLTF material specified {} texture (image index {}), but data "
+                         "not found. Using default.",
+                         texture_type_name, image_index);
+          }
         }
-      } else {
-        // No base color texture specified in GLTF material, use default white.
-        enginePbrTextures.baseColor = textureStore.getDefaultTexture();
-      }
+        // std::println("using default texture {}", texture_type_name);
+        return fallback_texture;
+      };
 
-      // Assign fallback/default for other PBR textures for now
-      enginePbrTextures.metallicRoughness = textureStore.getDefaultTexture(); // Placeholder
-      enginePbrTextures.normal = textureStore.getDefaultTexture(); // Placeholder (e.g. flat normal)
-      enginePbrTextures.occlusion = textureStore.getDefaultTexture(); // Placeholder
-      enginePbrTextures.emissive = textureStore.getDefaultTexture();  // Placeholder
+      enginePbrTextures.baseColor = load_gltf_texture(
+          gltfPrimitive.baseColorTextureGltfIndex, "BaseColor", textureStore.getDefaultTexture());
+      enginePbrTextures.normal = load_gltf_texture(gltfPrimitive.normalTextureGltfIndex, "Normal",
+                                                   textureStore.getDefaultNormalTexture());
+      enginePbrTextures.metallicRoughness =
+          load_gltf_texture(gltfPrimitive.metallicRoughnessTextureGltfIndex, "MetallicRoughness",
+                            textureStore.getDefaultMRTexture());
+      enginePbrTextures.occlusion = load_gltf_texture(
+          gltfPrimitive.occlusionTextureGltfIndex, "Occlusion", textureStore.getDefaultTexture());
+      enginePbrTextures.emissive =
+          load_gltf_texture(gltfPrimitive.emissiveTextureGltfIndex, "Emissive",
+                            textureStore.getDefaultEmissiveTexture());
 
       std::string engineMeshName = gltfMesh.name + "_Prim" + std::to_string(primIdx);
       auto newEngineMesh = std::make_unique<Mesh>(

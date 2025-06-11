@@ -1,7 +1,7 @@
 module;
 
 // #include "macros.hpp"
-// #include "primitive_types.hpp"
+#include "primitive_types.hpp"
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -14,6 +14,14 @@ export module vulkan_app:Types;
 import vulkan_hpp;
 import std;
 
+export struct ShaderTogglesUBO {
+  i32 useNormalMapping{1};
+  i32 useOcclusion{1};
+  i32 useEmission{1};
+  i32 useLights{1};
+  i32 useAmbient{1};
+};
+
 export struct Vertex {
   glm::vec3 pos;
   glm::vec3 normal;
@@ -24,8 +32,9 @@ export struct Vertex {
 export struct UniformBufferObject {
   glm::mat4 model;
   glm::mat4 view;
-  glm::mat4 projection;
-  glm::mat3 normalMatrix;
+  glm::mat4 projection;   // Swapped to match shader
+  glm::mat4 inverseView;  // Swapped to match shader
+  glm::mat4 normalMatrix; // Use mat4 to avoid std140 padding issues
 };
 
 export struct Transform {
@@ -85,14 +94,53 @@ export [[nodiscard]] Transform decomposeFromMatrix(const glm::mat4 &matrix) {
   return t;
 }
 
-export struct Material {
-  glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
-  float metallicFactor{1.0f};
-  float roughnessFactor{1.0f};
-  float occlusionStrength{1.0f};
-  glm::vec3 emissiveFactor{0.0f};
-  float normalScale{1.0f};
-  float heightScale{0.0f};
+const int MAX_LIGHTS = 16; // Set a max number of lights for our buffer
+
+export struct PointLight {
+  alignas(16) glm::vec4 position; // Use vec4 for alignment, w can be used for type or radius
+  alignas(16) glm::vec4 color;    // Use vec4 for alignment, w is intensity
+};
+
+export struct SceneLightsUBO {
+  PointLight lights[MAX_LIGHTS];
+  int lightCount;
+};
+
+struct alignas(16) Material {
+  // Base color (rgba)
+  alignas(16) glm::vec4 baseColorFactor{1.0f, 1.0f, 1.0f, 1.0f};
+  // Metallic-roughness multipliers
+  float metallicFactor{1.0f};  // offset 16
+  float roughnessFactor{1.0f}; // offset 20
+  // Occlusion
+  float occlusionStrength{1.0f}; // offset 24
+  float _pad0;                   // offset 28 (pad to 16)
+
+  // Emissive color
+  alignas(16) glm::vec3 emissiveFactor{0.0f, 0.0f, 0.0f}; // offset 32 (+4 pad)
+  float _pad1;                                            // offset 44
+
+  // Normal and height
+  float normalScale{1.0f}; // offset 48
+  float heightScale{0.0f}; // offset 52
+private:
+  float _pad2[2]; // offset 56 (pad to 64)
+public:
+  // Transmission (glTF extension)
+  float transmissionFactor{0.0f}; // offset 64
+  float _pad3[3];                 // offset 68 (pad to 80)
+
+  // Clearcoat (glTF extension)
+  float clearcoatFactor{0.0f};    // offset 80
+  float clearcoatRoughness{0.0f}; // offset 84
+  glm::vec2 _pad4{0.0f, 0.0f};    // offset 88 (pad to 96)
+
+  // Sheen (glTF extension)
+  glm::vec3 sheenColorFactor{0.0f, 0.0f, 0.0f}; // offset 96 (+4 pad)
+  float sheenRoughness{0.0f};                   // offset 108
+  float _pad5;                                  // offset 112
+
+  // Total size: 112 + padding = 128 bytes
 };
 
 export class Camera {
@@ -101,13 +149,13 @@ public:
   glm::vec3 Position{-10.0f, -10.0f, 60.0f}; // World position
   float Yaw = -75.0f;                        // Horizontal rotation (degrees)
   float Pitch = 10.0f;                       // Vertical rotation (degrees)
-  float Roll = 0.0f;                         // Added: Roll rotation (degrees)
+  float Roll = 180.0f;                       // Added: Roll rotation (degrees)
   float Zoom = 45.0f;                        // Field of view (degrees)
   float Near = 0.1f;                         // Near clipping plane
   float Far = 10000.0f;                      // Far clipping plane
 
   // === Control Parameters ===
-  float MovementSpeed = 100.f;   // Base movement speed
+  float MovementSpeed = 10.f;    // Base movement speed
   float MouseSensitivity = 0.1f; // Mouse look sensitivity
   bool MouseCaptured = false;    // Mouse control state
 

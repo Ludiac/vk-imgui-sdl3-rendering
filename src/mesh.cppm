@@ -172,11 +172,14 @@ public:
       std::println("Error: Mesh '{}': MVP UBO not mapped for image index {}.", name, currentImage);
       return;
     }
+
     UniformBufferObject ubo{};
     ubo.model = model;
     ubo.view = view;
     ubo.projection = projection;
-    ubo.normalMatrix = glm::transpose(glm::inverse(glm::mat3(ubo.model)));
+    ubo.inverseView = glm::inverse(view);
+    ubo.normalMatrix = glm::transpose(glm::inverse(model));
+
     vk::DeviceSize offset = sizeof(UniformBufferObject) * currentImage;
     char *baseMapped = static_cast<char *>(mvpUniformBuffers.getMappedData());
     std::memcpy(baseMapped + offset, &ubo, sizeof(ubo));
@@ -220,6 +223,10 @@ public:
     vk::DescriptorBufferInfo mvpUboInfoStorage;
     vk::DescriptorBufferInfo materialUboInfoStorage;
     vk::DescriptorImageInfo baseColorTextureInfoStorage;
+    vk::DescriptorImageInfo normalTextureInfoStorage;
+    vk::DescriptorImageInfo metallicRoughnessTextureInfoStorage;
+    vk::DescriptorImageInfo occlusionTextureInfoStorage;
+    vk::DescriptorImageInfo emissiveTextureInfoStorage;
     if (mvpUniformBuffers) {
       mvpUboInfoStorage =
           vk::DescriptorBufferInfo{.buffer = mvpUniformBuffers.buffer_,
@@ -234,6 +241,7 @@ public:
                                  .pBufferInfo = &mvpUboInfoStorage});
     } else {
     }
+
     if (materialUniformBuffer) {
       auto alignment = device_.physical().getProperties().limits.minUniformBufferOffsetAlignment;
       auto alignedMaterialSize = (sizeof(Material) + alignment - 1) & ~(alignment - 1);
@@ -250,20 +258,41 @@ public:
                                  .pBufferInfo = &materialUboInfoStorage});
     } else {
     }
-    if (textures.baseColor && *textures.baseColor->view && *textures.baseColor->sampler) {
-      baseColorTextureInfoStorage =
-          vk::DescriptorImageInfo{.sampler = *textures.baseColor->sampler,
-                                  .imageView = *textures.baseColor->view,
-                                  .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
-      writes.emplace_back(
-          vk::WriteDescriptorSet{.dstSet = *descriptorSets[currentImage],
-                                 .dstBinding = 2,
-                                 .dstArrayElement = 0,
-                                 .descriptorCount = 1,
-                                 .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-                                 .pImageInfo = &baseColorTextureInfoStorage});
-    } else {
-    }
+
+    auto create_texture_write = [&](uint32_t binding, vk::DescriptorImageInfo &imageInfo,
+                                    const std::shared_ptr<Texture> &texture) {
+      if (!texture) {
+        std::print("no texture {}", binding);
+        return;
+      }
+      if (!*texture->view) {
+        std::print(", no view {}", binding);
+        return;
+      }
+      if (!*texture->sampler) {
+        std::println(", no sampler {}", binding);
+        return;
+      }
+      if (texture && *texture->view && *texture->sampler) {
+        imageInfo = vk::DescriptorImageInfo{.sampler = *texture->sampler,
+                                            .imageView = *texture->view,
+                                            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
+        writes.emplace_back(
+            vk::WriteDescriptorSet{.dstSet = *descriptorSets[currentImage],
+                                   .dstBinding = binding,
+                                   .dstArrayElement = 0,
+                                   .descriptorCount = 1,
+                                   .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+                                   .pImageInfo = &imageInfo});
+      }
+    };
+
+    create_texture_write(2, baseColorTextureInfoStorage, textures.baseColor);
+    create_texture_write(3, normalTextureInfoStorage, textures.normal);
+    create_texture_write(4, metallicRoughnessTextureInfoStorage, textures.metallicRoughness);
+    create_texture_write(5, occlusionTextureInfoStorage, textures.occlusion);
+    create_texture_write(6, emissiveTextureInfoStorage, textures.emissive);
+
     if (!writes.empty()) {
       device_.logical().updateDescriptorSets(writes, nullptr);
     } else {

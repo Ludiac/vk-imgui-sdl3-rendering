@@ -1,12 +1,13 @@
 module;
 
+#define GLM_ENABLE_EXPERIMENTAL
 #include "macros.hpp"
 #include "primitive_types.hpp"
 // #include "tiny_gltf.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-// #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/norm.hpp> // For length2
 
 export module vulkan_app:ModelLoader;
 
@@ -22,12 +23,13 @@ export struct GltfPrimitiveData {
   std::vector<u32> indices;
   Material material;
 
-  // Store the GLTF texture index for the base color map. -1 if not present.
   int baseColorTextureGltfIndex = -1;
-  // Store the GLTF texture index for other maps as you add them
-  // int metallicRoughnessTextureGltfIndex = -1;
-  // int normalTextureGltfIndex = -1;
-  // ... etc.
+  int metallicRoughnessTextureGltfIndex = -1;
+  int normalTextureGltfIndex = -1;
+  int occlusionTextureGltfIndex = -1;
+  int emissiveTextureGltfIndex = -1;
+  int transmissionTextureGltfIndex;
+  int clearcoatNormalTextureGltfIndex;
 
   int gltfMaterialIndex = -1;
 };
@@ -148,6 +150,78 @@ getIndexAccessorData(const gltfm::Model &model, int accessorIndex) {
   }
   return indices;
 }
+
+void generateTangents(std::vector<Vertex> &vertices, const std::vector<u32> &indices) {
+  if (indices.empty()) {
+    return;
+  }
+
+  std::vector<glm::vec3> temp_tangents(vertices.size(), glm::vec3(0.0f));
+  std::vector<glm::vec3> temp_bitangents(vertices.size(), glm::vec3(0.0f));
+
+  for (size_t i = 0; i < indices.size(); i += 3) {
+    Vertex &v0 = vertices[indices[i + 0]];
+    Vertex &v1 = vertices[indices[i + 1]];
+    Vertex &v2 = vertices[indices[i + 2]];
+
+    glm::vec3 edge1 = v1.pos - v0.pos;
+    glm::vec3 edge2 = v2.pos - v0.pos;
+
+    glm::vec2 deltaUV1 = v1.uv - v0.uv;
+    glm::vec2 deltaUV2 = v2.uv - v0.uv;
+
+    float f = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
+    if (std::isinf(f) || std::isnan(f)) {
+      continue;
+    }
+
+    glm::vec3 tangent;
+    tangent.x = f * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x);
+    tangent.y = f * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y);
+    tangent.z = f * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z);
+
+    glm::vec3 bitangent;
+    bitangent.x = f * (-deltaUV2.x * edge1.x + deltaUV1.x * edge2.x);
+    bitangent.y = f * (-deltaUV2.x * edge1.y + deltaUV1.x * edge2.y);
+    bitangent.z = f * (-deltaUV2.x * edge1.z + deltaUV1.x * edge2.z);
+
+    temp_tangents[indices[i + 0]] += tangent;
+    temp_tangents[indices[i + 1]] += tangent;
+    temp_tangents[indices[i + 2]] += tangent;
+
+    temp_bitangents[indices[i + 0]] += bitangent;
+    temp_bitangents[indices[i + 1]] += bitangent;
+    temp_bitangents[indices[i + 2]] += bitangent;
+  }
+
+  // MODIFIED: More robust finalization of tangents
+  for (size_t i = 0; i < vertices.size(); ++i) {
+    Vertex &v = vertices[i];
+    const glm::vec3 &n = v.normal;
+    const glm::vec3 &t_accum = temp_tangents[i];
+    const glm::vec3 &b_accum = temp_bitangents[i];
+
+    // Gram-Schmidt orthogonalize: T' = normalize(T - (T . N) * N)
+    glm::vec3 tangent = t_accum - n * glm::dot(n, t_accum);
+
+    // Check for degenerate cases (tangent parallel to normal)
+    // if (glm::length2(tangent) > 1e-6f) { // Use length squared for efficiency and robustness
+    // tangent = glm::normalize(tangent);
+    //
+    // // Calculate handedness to handle mirrored UVs
+    // float handedness = (glm::dot(glm::cross(n, tangent), b_accum) < 0.0f) ? -1.0f : 1.0f;
+    // v.tangent = glm::vec4(tangent, handedness);
+    // } else {
+    //   // Fallback for when tangent is zero or too small.
+    //   // Create an arbitrary but valid tangent.
+    //   // This is a common technique using the cross product to find a perpendicular vector.
+    glm::vec3 axis =
+        (std::abs(n.x) > std::abs(n.z)) ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0);
+    glm::vec3 fallback_t = glm::normalize(glm::cross(n, axis));
+    v.tangent = glm::vec4(fallback_t, 1.0f);
+    // }
+  }
+}
 } // namespace GltfLoaderHelpers
 
 export [[nodiscard]] std::expected<LoadedGltfScene, std::string>
@@ -172,7 +246,6 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
     return std::unexpected("Failed to parse GLTF file: " + filePath);
 
   // --- 0. Load Images ---
-  // TinyGLTF can load images from URIs if compiled with STB_IMAGE, or access embedded data.
   for (size_t i = 0; i < model.images.size(); ++i) {
     const auto &gltfImage = model.images[i];
     GltfImageData imageData;
@@ -182,11 +255,6 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
 
     if (!gltfImage.uri.empty() && gltfImage.bufferView == -1) { // External image
       std::string imagePath = baseDir.empty() ? gltfImage.uri : baseDir + "/" + gltfImage.uri;
-      // TinyGLTF's LoadImageData function can be used if STB is enabled.
-      // Or you can use your own image loading library here (e.g. stb_image directly)
-      // For simplicity, assuming tinygltf's internal STB usage or direct pixel access.
-      // If gltfm::Image::image is populated, it means tinygltf loaded it (e.g. from URI or
-      // embedded)
       if (!gltfImage.image.empty()) {
         imageData.pixels = gltfImage.image;
         imageData.width = gltfImage.width;
@@ -196,8 +264,6 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
         std::println(
             "Warning: GLTF image '{}' has URI but no pixel data loaded by tinygltf. Path: {}",
             gltfImage.name, imagePath);
-        // Here you might attempt to load imagePath using stb_image directly if tinygltf didn't.
-        // For now, we'll skip if tinygltf didn't load it.
         continue;
       }
     } else if (gltfImage.bufferView >= 0) { // Embedded image
@@ -206,20 +272,15 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
       const unsigned char *data_ptr = buffer.data.data() + bufferView.byteOffset;
       size_t data_len = bufferView.byteLength;
 
-      // TinyGLTF can also load embedded images into gltfImage.image if mimeType is known.
       if (!gltfImage.image.empty()) {
         imageData.pixels = gltfImage.image;
         imageData.width = gltfImage.width;
         imageData.height = gltfImage.height;
         imageData.component = gltfImage.component;
       } else {
-        // If gltfImage.image is empty, but bufferView is valid, it might be raw data
-        // that tinygltf didn't decode (e.g. if mimeType was missing or unsupported by internal
-        // STB). You might need to use stb_image_load_from_memory here.
         std::println("Warning: GLTF image '{}' is embedded (bufferView {}) but not decoded by "
                      "tinygltf. MimeType: {}",
                      gltfImage.name, gltfImage.bufferView, gltfImage.mimeType);
-        // For now, skip if not decoded by tinygltf.
         continue;
       }
     } else {
@@ -227,24 +288,11 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
       continue;
     }
 
-    // Determine if sRGB (simplistic check, GLTF extensions might specify color space)
-    if (gltfImage.extras.IsObject() && gltfImage.extras.Has("colorspace")) {
-      if (gltfImage.extras.Get("colorspace").IsString() &&
-          gltfImage.extras.Get("colorspace").Get<std::string>() == "srgb") {
-        imageData.isSrgb = true;
-      } else {
-        imageData.isSrgb = false; // Or linear
-      }
-    } else {
-      // Heuristic: if it's a baseColorTexture, assume sRGB. Otherwise, could be linear.
-      // This is a simplification. Proper color space handling is complex.
-      // For now, assume color textures are sRGB.
-      imageData.isSrgb = true;
-    }
+    // Color space determination would go here
+    imageData.isSrgb = true;
 
     loadedScene.images[static_cast<int>(i)] = std::move(imageData);
   }
-  // loadedScene.gltfMaterials = model.materials; // Store raw GLTF materials if needed
 
   // 1. Process Meshes and their Primitives
   for (const auto &gltfMesh : model.meshes) {
@@ -256,7 +304,7 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
       GltfPrimitiveData primitiveData;
       primitiveData.gltfMaterialIndex = gltfPrimitive.material;
 
-      if (gltfPrimitive.indices >= 0) { /* ... load indices ... */
+      if (gltfPrimitive.indices >= 0) {
         auto indicesResult = GltfLoaderHelpers::getIndexAccessorData(model, gltfPrimitive.indices);
         if (indicesResult)
           primitiveData.indices = std::move(*indicesResult);
@@ -267,6 +315,8 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
 
       std::vector<glm::vec3> positions, normals;
       std::vector<glm::vec2> uvs;
+      std::vector<glm::vec4> tangents; // To store loaded tangents
+
       if (auto it = gltfPrimitive.attributes.find("POSITION");
           it != gltfPrimitive.attributes.end()) {
         auto res = GltfLoaderHelpers::getAccessorData<float, 3>(model, it->second);
@@ -282,7 +332,7 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
         if (res)
           normals = std::move(*res);
         else
-          std::println("Warning: No NORMAL for {}.", meshData.name);
+          std::println("Warning: Failed to load NORMAL for {}.", meshData.name);
       }
       if (auto it = gltfPrimitive.attributes.find("TEXCOORD_0");
           it != gltfPrimitive.attributes.end()) {
@@ -290,7 +340,19 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
         if (res)
           uvs = std::move(*res);
         else
-          std::println("Warning: No TEXCOORD_0 for {}.", meshData.name);
+          std::println("Warning: Failed to load TEXCOORD_0 for {}.", meshData.name);
+      }
+
+      bool hasTangents = false;
+      if (auto it = gltfPrimitive.attributes.find("TANGENT");
+          it != gltfPrimitive.attributes.end()) {
+        auto res = GltfLoaderHelpers::getAccessorData<float, 4>(model, it->second);
+        if (res) {
+          tangents = std::move(*res);
+          hasTangents = true;
+        } else {
+          std::println("Warning: Failed to load TANGENT for {}.", meshData.name);
+        }
       }
 
       size_t vertexCount = positions.size();
@@ -299,31 +361,44 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
         primitiveData.vertices[i].pos = positions[i];
         primitiveData.vertices[i].normal = (i < normals.size()) ? normals[i] : glm::vec3(0, 1, 0);
         primitiveData.vertices[i].uv = (i < uvs.size()) ? uvs[i] : glm::vec2(0, 0);
-        primitiveData.vertices[i].tangent = glm::vec4(1, 0, 0, 1); // Placeholder
+        if (hasTangents && i < tangents.size()) {
+          primitiveData.vertices[i].tangent = tangents[i];
+        }
+      }
+
+      if (!hasTangents) {
+        GltfLoaderHelpers::generateTangents(primitiveData.vertices, primitiveData.indices);
       }
 
       if (gltfPrimitive.material >= 0 &&
           static_cast<size_t>(gltfPrimitive.material) < model.materials.size()) {
         const auto &gltfMaterial = model.materials[gltfPrimitive.material];
         const auto &pbr = gltfMaterial.pbrMetallicRoughness;
+
+        primitiveData.material.normalScale = gltfMaterial.normalTexture.scale;
         primitiveData.material.baseColorFactor = glm::make_vec4(pbr.baseColorFactor.data());
         primitiveData.material.metallicFactor = static_cast<float>(pbr.metallicFactor);
         primitiveData.material.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
+        primitiveData.material.occlusionStrength =
+            static_cast<float>(gltfMaterial.occlusionTexture.strength);
+        primitiveData.material.emissiveFactor = glm::make_vec3(gltfMaterial.emissiveFactor.data());
 
-        // *** STORE BASE COLOR TEXTURE INDEX ***
-        if (pbr.baseColorTexture.index >= 0) {
-          primitiveData.baseColorTextureGltfIndex = pbr.baseColorTexture.index;
-          // GLTF texture index -> GLTF image index
-          if (static_cast<size_t>(pbr.baseColorTexture.index) < model.textures.size()) {
-            primitiveData.baseColorTextureGltfIndex =
-                model.textures[pbr.baseColorTexture.index].source;
-            // Now baseColorTextureGltfIndex is actually the GLTF *image* index.
-          } else {
-            primitiveData.baseColorTextureGltfIndex = -1; // Invalid texture index
+        auto get_image_index = [&](int texture_index) {
+          if (texture_index >= 0 && static_cast<size_t>(texture_index) < model.textures.size()) {
+            return model.textures[texture_index].source;
           }
-        }
-        // TODO: Extract other texture indices (metallicRoughnessTexture.index, normalTexture.index,
-        // etc.)
+          return -1;
+        };
+        // Texture index assignments...
+        primitiveData.baseColorTextureGltfIndex = get_image_index(pbr.baseColorTexture.index);
+        primitiveData.metallicRoughnessTextureGltfIndex =
+            get_image_index(pbr.metallicRoughnessTexture.index);
+        primitiveData.normalTextureGltfIndex = get_image_index(gltfMaterial.normalTexture.index);
+        primitiveData.occlusionTextureGltfIndex =
+            get_image_index(gltfMaterial.occlusionTexture.index);
+        primitiveData.emissiveTextureGltfIndex =
+            get_image_index(gltfMaterial.emissiveTexture.index);
+
       } else {
         primitiveData.material = Material{};
       }
@@ -341,39 +416,20 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
     nodeData.meshIndex = gltfNode.mesh;
 
     if (!gltfNode.matrix.empty()) {
-      std::array<float, 16> mat_data;
-      for (int k = 0; k < 16; ++k)
-        mat_data[k] = static_cast<float>(gltfNode.matrix[k]);
-      nodeData.transform = glm::make_mat4(mat_data.data());
+      nodeData.transform = glm::make_mat4(gltfNode.matrix.data());
     } else {
       glm::mat4 T = glm::mat4(1.f), R = glm::mat4(1.f), S = glm::mat4(1.f);
-
-      // Convert translation components to float
       if (!gltfNode.translation.empty()) {
-        glm::vec3 translation(static_cast<float>(gltfNode.translation[0]),
-                              static_cast<float>(gltfNode.translation[1]),
-                              static_cast<float>(gltfNode.translation[2]));
-        T = glm::translate(T, translation);
+        T = glm::translate(T, glm::vec3(gltfNode.translation[0], gltfNode.translation[1],
+                                        gltfNode.translation[2]));
       }
-
-      // Convert rotation components to float and reorder (xyzw -> wxyz)
       if (!gltfNode.rotation.empty()) {
-        glm::quat rotation(static_cast<float>(gltfNode.rotation[3]), // w
-                           static_cast<float>(gltfNode.rotation[0]), // x
-                           static_cast<float>(gltfNode.rotation[1]), // y
-                           static_cast<float>(gltfNode.rotation[2])  // z
-        );
-        R = glm::mat4_cast(rotation);
+        R = glm::mat4_cast(glm::quat(gltfNode.rotation[3], gltfNode.rotation[0],
+                                     gltfNode.rotation[1], gltfNode.rotation[2]));
       }
-
-      // Convert scale components to float
       if (!gltfNode.scale.empty()) {
-        glm::vec3 scale(static_cast<float>(gltfNode.scale[0]),
-                        static_cast<float>(gltfNode.scale[1]),
-                        static_cast<float>(gltfNode.scale[2]));
-        S = glm::scale(S, scale);
+        S = glm::scale(S, glm::vec3(gltfNode.scale[0], gltfNode.scale[1], gltfNode.scale[2]));
       }
-
       nodeData.transform = T * R * S;
     }
 
@@ -388,12 +444,12 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
   if (model.defaultScene >= 0 && static_cast<size_t>(model.defaultScene) < model.scenes.size()) {
     for (int rootNodeIdx : model.scenes[model.defaultScene].nodes)
       loadedScene.rootNodeIndices.push_back(rootNodeIdx);
-  } else if (!model.nodes.empty() && model.scenes.empty()) { /* ... fallback same as before ... */
-    for (size_t i = 0; i < loadedScene.nodes.size(); ++i)
-      if (loadedScene.nodes[i].parentIndex == -1)
+  } else if (!model.nodes.empty()) {
+    for (size_t i = 0; i < loadedScene.nodes.size(); ++i) {
+      if (loadedScene.nodes[i].parentIndex == -1) {
         loadedScene.rootNodeIndices.push_back(static_cast<int>(i));
-    if (loadedScene.rootNodeIndices.empty() && !loadedScene.nodes.empty())
-      loadedScene.rootNodeIndices.push_back(0);
+      }
+    }
   }
   return loadedScene;
 }

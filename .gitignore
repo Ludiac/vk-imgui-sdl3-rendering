@@ -45,6 +45,7 @@ _deps
 CMakeUserPresets.json
 
 /build
+/assets
 /.cache
 /.cpm_cache
 export.txt

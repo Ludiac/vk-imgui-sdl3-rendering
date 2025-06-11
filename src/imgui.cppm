@@ -14,6 +14,17 @@ import :VulkanDevice;
 import :VulkanInstance;
 import :scene;
 
+export void RenderShaderTogglesMenu(ShaderTogglesUBO &toggles) {
+  if (ImGui::Begin("Shader Toggles")) {
+    ImGui::Checkbox("Normal Mapping", (bool *)&toggles.useNormalMapping);
+    ImGui::Checkbox("Occlusion", (bool *)&toggles.useOcclusion);
+    ImGui::Checkbox("Emission", (bool *)&toggles.useEmission);
+    ImGui::Checkbox("Lights", (bool *)&toggles.useLights);
+    ImGui::Checkbox("Ambient", (bool *)&toggles.useAmbient);
+  }
+  ImGui::End();
+}
+
 void renderMeshControlsMenu(f32 framerate, const Scene &scene) {
   ImGui::Begin("mesh controls");
   for (size_t i = 0; i < scene.nodes.size(); ++i) {
@@ -116,34 +127,26 @@ void RenderVulkanStateWindow(VulkanDevice &device, Window &wd, int frameCap, flo
 
 bool EditMaterialProperties(const std::string &materialOwnerName, Material &material) {
   bool changed = false;
-  ImGui::PushID(&material); // Unique ID scope for this material editor instance
-
-  // You can use materialOwnerName to make the TreeNode label more specific if needed,
-  // e.g., std::string title = materialOwnerName + " Material";
-  // if (ImGui::TreeNode(title.c_str())) {
-  // For now, using a generic "Material Properties" which is clear when nested under a node/mesh.
-  if (ImGui::TreeNode("Material Properties")) {
-    if (ImGui::ColorEdit4("Base Color Factor", &material.baseColorFactor.x)) {
-      changed = true;
-    }
-    if (ImGui::SliderFloat("Metallic Factor", &material.metallicFactor, 0.0f, 1.0f)) {
-      changed = true;
-    }
-    if (ImGui::SliderFloat("Roughness Factor", &material.roughnessFactor, 0.0f, 1.0f)) {
-      changed = true;
-    }
-
-    // Add ImGui controls for other members of your Material struct here:
-    // Example:
-    // if (ImGui::ColorEdit3("Emissive Factor", &material.emissiveFactor.x)) changed = true;
-    // if (ImGui::SliderFloat("Occlusion Strength", &material.occlusionStrength, 0.0f, 1.0f))
-    // changed = true; if (ImGui::SliderFloat("Normal Scale", &material.normalScale, 0.0f, 2.0f))
-    // changed = true; if (ImGui::SliderFloat("Height Scale", &material.heightScale, 0.0f, 0.1f))
-    // changed = true;
-
-    ImGui::TreePop();
-  }
-  ImGui::PopID();
+  // ImGui::PushID(&material); // Unique ID scope for this material editor instance
+  // if (ImGui::TreeNode("Material Properties")) {
+  //   if (ImGui::ColorEdit4("Base Color Factor", &material.baseColorFactor.x)) {
+  //     changed = true;
+  //   }
+  //   if (ImGui::SliderFloat("Metallic Factor", &material.metallicFactor, 0.0f, 1.0f)) {
+  //     changed = true;
+  //   }
+  //   if (ImGui::SliderFloat("Roughness Factor", &material.roughnessFactor, 0.0f, 1.0f)) {
+  //     changed = true;
+  //   }
+  //   if (ImGui::SliderFloat("Occlusion Strength", &material.occlusionStrength, 0.0f, 1.0f)) {
+  //     changed = true;
+  //   }
+  //   if (ImGui::ColorEdit3("Emissive Factor", &material.emissiveFactor.x)) {
+  //     changed = true;
+  //   }
+  //   ImGui::TreePop();
+  // }
+  // ImGui::PopID();
   return changed;
 }
 
@@ -209,4 +212,18 @@ export void RenderSceneHierarchyMaterialEditor(Scene &scene, u32 currentFrameInd
     // TreeNode.
   }
   ImGui::End(); // End of "Scene Inspector" window
+}
+
+void RenderLightControlMenu(SceneLightsUBO &lightUBO) {
+  ImGui::Begin("Light Controls");
+  for (int i = 0; i < lightUBO.lightCount; ++i) {
+    std::string label = "Light " + std::to_string(i);
+    ImGui::PushID(i);
+    ImGui::Text("%s", label.c_str());
+    ImGui::DragFloat3("Position", &lightUBO.lights[i].position.x, 0.5f);
+    ImGui::ColorEdit3("Color", &lightUBO.lights[i].color.x);
+    ImGui::DragFloat("Intensity", &lightUBO.lights[i].color.w, 1.0f, 0.0f, 1000.0f);
+    ImGui::PopID();
+  }
+  ImGui::End();
 }

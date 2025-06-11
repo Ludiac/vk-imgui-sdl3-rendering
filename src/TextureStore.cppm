@@ -21,6 +21,9 @@ private:
   // The core change: Use a u32 hash as the key for our texture cache.
   std::map<u32, std::shared_ptr<Texture>> loadedTextures_;
   std::shared_ptr<Texture> defaultWhiteTexture_;
+  std::shared_ptr<Texture> defaultNormalTexture_;
+  std::shared_ptr<Texture> defaultMRTexture_;
+  std::shared_ptr<Texture> defaultEmissiveTexture_;
 
 public:
   [[nodiscard]] std::expected<void, std::string> createInternalCommandPool() {
@@ -42,8 +45,15 @@ public:
     // entry in our cache.
     std::array<uint8_t, 4> whitePixel = {255, 255, 255, 255};
     defaultWhiteTexture_ = getColorTexture(whitePixel); // This will hash and store it.
+    std::array<uint8_t, 4> normalPixel = {128, 128, 128, 255};
+    defaultNormalTexture_ = getColorTexture(normalPixel); // This will hash and store it.
+    std::array<uint8_t, 4> mrPixel = {0, 255, 0, 255};
+    defaultMRTexture_ = getColorTexture(mrPixel); // This will hash and store it.
+    std::array<uint8_t, 4> emissivePixel = {0, 0, 0, 255};
+    defaultEmissiveTexture_ = getColorTexture(emissivePixel); // This will hash and store it.
 
-    if (!defaultWhiteTexture_) {
+    if (!defaultWhiteTexture_ || !defaultNormalTexture_ || !defaultMRTexture_ ||
+        !defaultEmissiveTexture_) {
       // The getColorTexture method already prints errors, but we can add a critical one here.
       std::println("CRITICAL: TextureStore failed to create the default white texture.");
       return std::unexpected("Failed to create default white texture.");
@@ -136,6 +146,18 @@ public:
   }
 
   std::shared_ptr<Texture> getDefaultTexture() const { return defaultWhiteTexture_; }
+  std::shared_ptr<Texture> getDefaultNormalTexture() const { return defaultNormalTexture_; }
+  std::shared_ptr<Texture> getDefaultMRTexture() const { return defaultMRTexture_; }
+  std::shared_ptr<Texture> getDefaultEmissiveTexture() const { return defaultEmissiveTexture_; }
+  PBRTextures getAllDefaultTextures() const {
+    return PBRTextures{
+        .baseColor = defaultWhiteTexture_,
+        .metallicRoughness = defaultMRTexture_,
+        .normal = defaultWhiteTexture_,
+        .occlusion = defaultWhiteTexture_,
+        .emissive = defaultEmissiveTexture_,
+    };
+  };
 
   ~TextureStore() = default;
   TextureStore(const TextureStore &) = delete;

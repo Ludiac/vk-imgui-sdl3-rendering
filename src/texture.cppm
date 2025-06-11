@@ -103,7 +103,7 @@ void generateMipmaps(VulkanDevice &vulkanDevice, const vk::raii::CommandBuffer &
 }
 } // namespace TextureHelpers
 
-export std::expected<Texture, std::string>
+export [[nodiscard]] std::expected<Texture, std::string>
 createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize imageSize,
               vk::Extent3D texExtent, vk::Format texFormat,
 

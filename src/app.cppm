@@ -1,5 +1,6 @@
 module;
 
+#define GLM_ENABLE_EXPERIMENTAL
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_vulkan.h"
@@ -9,6 +10,7 @@ module;
 #include <SDL3/SDL_vulkan.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+// #include <glm/gtx/string_cast.hpp>
 
 export module vulkan_app;
 
@@ -20,41 +22,17 @@ import :VulkanWindow;
 import :VulkanDevice;
 import :VulkanInstance;
 import :VulkanPipeline;
-import :utils;        // For Vertex, Material, UniformBufferObject, Transform, Camera
-import :mesh;         // For Mesh (refactored version)
-import :scene;        // For Scene, SceneNode, SceneNodeCreateInfo (refactored version)
-import :texture;      // For Texture, PBRTextures
-import :TextureStore; // For managing textures
-import :ModelLoader;  // Not used in this hardcoded example, but for future
-import :SceneBuilder; // Not used in this hardcoded example, but for future
-import :imgui;        // For ImGui helper functions
+import :utils;
+import :mesh;
+import :scene;
+import :texture;
+import :TextureStore;
+import :ModelLoader;
+import :SceneBuilder;
+import :imgui;
 
 namespace {                        // Anonymous namespace for internal linkage
 constexpr u32 MIN_IMAGE_COUNT = 2; // Renamed from minImageCount to avoid conflict
-
-// Helper to create vertices for a single quad (face of a cube)
-// Normal points outwards. UVs cover the quad. Tangent is basic.
-std::vector<Vertex> createQuadVertices(float size, const glm::vec3 &normal, const glm::vec3 &up,
-                                       const glm::vec3 &right) {
-  float s = size / 2.0f;
-  glm::vec3 p0 = -s * right - s * up; // Bottom-left
-  glm::vec3 p1 = s * right - s * up;  // Bottom-right
-  glm::vec3 p2 = s * right + s * up;  // Top-right
-  glm::vec3 p3 = -s * right + s * up; // Top-left
-
-  glm::vec4 tangent = glm::vec4(right, 1.0f); // Basic tangent
-  if (glm::length(right) == 0.0f)
-    tangent = glm::vec4(1, 0, 0, 1); // Fallback
-
-  return {
-      {p0, normal, {0.0f, 1.0f}, tangent}, // UVs: (0,1) BL
-      {p1, normal, {1.0f, 1.0f}, tangent}, //      (1,1) BR
-      {p2, normal, {1.0f, 0.0f}, tangent}, //      (1,0) TR
-      {p3, normal, {0.0f, 0.0f}, tangent}  //      (0,0) TL
-  };
-}
-// Indices for a quad (two triangles, CCW)
-std::vector<u32> createQuadIndices() { return {0, 1, 2, 2, 3, 0}; }
 
 std::vector<Vertex> createAxisLineVertices(const glm::vec3 &start, const glm::vec3 &end,
                                            const glm::vec3 &normal_placeholder) {
@@ -66,7 +44,6 @@ std::vector<Vertex> createAxisLineVertices(const glm::vec3 &start, const glm::ve
 std::vector<u32> createAxisLineIndices() {
   return {0, 1}; // A single line segment
 }
-} // anonymous namespace
 
 void check_vk_result(VkResult err) {
   if (err == VK_SUCCESS)
@@ -84,6 +61,7 @@ void check_vk_result_hpp(vk::Result err) {
   std::print("{}", errMsg); // Keep console print
   std::exit(0);
 }
+} // anonymous namespace
 
 export class App {
   VulkanInstance instance;
@@ -99,6 +77,15 @@ export class App {
   vk::raii::PipelineCache pipelineCache{nullptr};
   vk::raii::DescriptorSetLayout combinedMeshLayout{nullptr}; // Single layout for meshes
 
+  vk::raii::DescriptorSetLayout sceneLayout{nullptr};       // Layout for scene-wide data
+  std::vector<vk::raii::DescriptorSet> sceneDescriptorSets; // One per frame-in-flight
+
+  std::vector<VmaBuffer> sceneLightsUbos; // MODIFIED: Now a vector for per-frame UBOs
+  SceneLightsUBO sceneLightsCpuBuffer;
+
+  std::vector<VmaBuffer> shaderTogglesUbos;
+  ShaderTogglesUBO shaderTogglesCpuBuffer;
+
   // Scene and Assets
   Scene scene{0};
   TextureStore textureStore{device, device.queue_};
@@ -112,14 +99,14 @@ export class App {
 
 public:
   // Create the single combined descriptor set layout for meshes
-  std::expected<void, std::string> createCombinedMeshDescriptorSetLayout() NOEXCEPT {
+  std::expected<void, std::string> createDescriptorSetLayouts() NOEXCEPT {
 
     std::vector<vk::DescriptorSetLayoutBinding> meshDataBindings = {
         {// Binding 0: MVP Uniform Buffer Object (Vertex Shader)
          .binding = 0,
          .descriptorType = vk::DescriptorType::eUniformBuffer,
          .descriptorCount = 1,
-         .stageFlags = vk::ShaderStageFlagBits::eVertex},
+         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment},
         {// Binding 1: Material Uniform Buffer Object (Fragment Shader)
          .binding = 1,
          .descriptorType = vk::DescriptorType::eUniformBuffer,
@@ -129,9 +116,25 @@ public:
          .binding = 2,
          .descriptorType = vk::DescriptorType::eCombinedImageSampler,
          .descriptorCount = 1,
-         .stageFlags = vk::ShaderStageFlagBits::eFragment}
-        // Add more bindings here for other PBR textures (normal, metallicRoughness, etc.)
-        // e.g., binding = 3 for normal map, etc.
+         .stageFlags = vk::ShaderStageFlagBits::eFragment},
+        {// Binding 3: Normal Map (Fragment Shader)
+         .binding = 3,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eFragment},
+        {// Binding 4: Metallic/Roughness Map (Fragment Shader)
+         .binding = 4,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eFragment},
+        {.binding = 5,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eFragment},
+        {.binding = 6,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eFragment},
     };
 
     vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount =
@@ -147,7 +150,38 @@ public:
     }
     combinedMeshLayout = std::move(layoutResult.value());
 
+    std::vector<vk::DescriptorSetLayoutBinding> sceneDataBindings = {
+        {// Binding 0: Scene Lights UBO (Fragment Shader)
+         .binding = 0,
+         .descriptorType = vk::DescriptorType::eUniformBuffer,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eFragment},
+        {// NEW Binding 1: Shader Toggles UBO (Vertex + Fragment)
+         .binding = 1,
+         .descriptorType = vk::DescriptorType::eUniformBuffer,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment},
+    };
+    vk::DescriptorSetLayoutCreateInfo sceneLayoutInfo{
+        .bindingCount = static_cast<u32>(sceneDataBindings.size()),
+        .pBindings = sceneDataBindings.data()};
+    auto sceneLayoutResult = device.logical().createDescriptorSetLayout(sceneLayoutInfo);
+    if (!sceneLayoutResult) {
+      return std::unexpected("Failed to create scene descriptor set layout: " +
+                             vk::to_string(sceneLayoutResult.error()));
+    }
+    sceneLayout = std::move(sceneLayoutResult.value());
+
     return {};
+  }
+
+  void allocateSceneDescriptorSets() {
+    std::vector<vk::DescriptorSetLayout> layouts(wd.Frames.size(), *sceneLayout);
+    vk::DescriptorSetAllocateInfo allocInfo{.descriptorPool = *device.descriptorPool_,
+                                            .descriptorSetCount =
+                                                static_cast<u32>(wd.Frames.size()),
+                                            .pSetLayouts = layouts.data()};
+    sceneDescriptorSets = device.logical().allocateDescriptorSets(allocInfo).value();
   }
 
   void createPipelines() { // Simplified pipeline creation
@@ -157,7 +191,7 @@ public:
     }
     VulkanPipeline &mainPipeline = graphicsPipelines[0];
 
-    std::vector<vk::DescriptorSetLayout> layouts = {*combinedMeshLayout};
+    std::vector<vk::DescriptorSetLayout> layouts = {*combinedMeshLayout, *sceneLayout};
 
     EXPECTED_VOID(mainPipeline.createPipelineLayout(device.logical(), layouts));
 
@@ -194,53 +228,87 @@ public:
                                                       lineInputAssembly, wd.RenderPass));
   }
 
+  // NEW: Function to set up the shader toggles UBO
+  [[nodiscard]] std::expected<void, std::string> SetupShaderToggles() {
+    vk::DeviceSize bufferSize = sizeof(ShaderTogglesUBO);
+    shaderTogglesUbos.resize(wd.Frames.size());
+
+    for (size_t i = 0; i < wd.Frames.size(); i++) {
+      vk::BufferCreateInfo bufferInfo{.size = bufferSize,
+                                      .usage = vk::BufferUsageFlagBits::eUniformBuffer};
+      vma::AllocationCreateInfo allocInfo{
+          .flags = vma::AllocationCreateFlagBits::eHostAccessSequentialWrite |
+                   vma::AllocationCreateFlagBits::eMapped,
+          .usage = vma::MemoryUsage::eAutoPreferHost};
+
+      auto bufferResult = device.createBufferVMA(bufferInfo, allocInfo);
+      if (!bufferResult) {
+        return std::unexpected("Couldn't create buffer for shader toggles UBO for frame " +
+                               std::to_string(i));
+      }
+      shaderTogglesUbos[i] = std::move(bufferResult.value());
+    }
+    return {};
+  }
+
+  [[nodiscard]] std::expected<void, std::string> SetupSceneLights() {
+    // Initialize some default lights on the CPU
+    sceneLightsCpuBuffer.lightCount = 2;
+    sceneLightsCpuBuffer.lights[0].position = {-20.0f, -20.0f, -20.0f, 1.0f};
+    sceneLightsCpuBuffer.lights[0].color = {150.0f, 150.0f, 150.0f, 1.0f}; // White light
+    sceneLightsCpuBuffer.lights[1].position = {20.0f, -30.0f, -15.0f, 1.0f};
+    sceneLightsCpuBuffer.lights[1].color = {200.0f, 150.0f, 50.0f, 1.0f}; // Warm light
+
+    // Create a GPU buffer for each frame in flight
+    vk::DeviceSize bufferSize = sizeof(SceneLightsUBO);
+    sceneLightsUbos.resize(wd.Frames.size());
+
+    for (size_t i = 0; i < wd.Frames.size(); i++) {
+      vk::BufferCreateInfo bufferInfo{.size = bufferSize,
+                                      .usage = vk::BufferUsageFlagBits::eUniformBuffer};
+      vma::AllocationCreateInfo allocInfo{
+          .flags = vma::AllocationCreateFlagBits::eHostAccessSequentialWrite |
+                   vma::AllocationCreateFlagBits::eMapped,
+          .usage = vma::MemoryUsage::eAutoPreferHost};
+
+      auto bufferResult = device.createBufferVMA(bufferInfo, allocInfo);
+      if (!bufferResult) {
+        return std::unexpected("Couldn't create buffer for light UBO for frame " +
+                               std::to_string(i));
+      }
+      sceneLightsUbos[i] = std::move(bufferResult.value());
+    }
+
+    return {};
+  }
+
   void createDebugAxesScene(u32 currentImageCount) {
     if (graphicsPipelines.size() < 2 || !*graphicsPipelines[1].pipeline) {
       std::println(
           "Error: TextureStore or Line Pipeline not initialized for createDebugAxesScene.");
       return;
     }
-    VulkanPipeline *linePipeline = &graphicsPipelines[1]; // Use the dedicated line pipeline
-    float axisLength = 10000.0f;                          // Make axes reasonably large
 
-    // X-Axis (Red)
-    Material xAxisMaterial;
-    PBRTextures xAxisTextures;
-    xAxisTextures.baseColor = textureStore.getColorTexture({255, 0, 0, 255});
-    auto xAxisMesh = std::make_unique<Mesh>(
-        device, "X_Axis",
-        createAxisLineVertices({-axisLength, 0, 0}, {axisLength, 0, 0}, {0, 1, 0}),
-        createAxisLineIndices(), xAxisMaterial, xAxisTextures, currentImageCount);
-    appOwnedMeshes.emplace_back(std::move(xAxisMesh));
-    scene.createNode(
-        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "X_Axis_Node"},
-        device.descriptorPool_, combinedMeshLayout);
+    VulkanPipeline *linePipeline = &graphicsPipelines[1];
+    float axisLength = 10000.0f;
 
-    // Y-Axis (Green)
-    Material yAxisMaterial;
-    PBRTextures yAxisTextures;
-    yAxisTextures.baseColor = textureStore.getColorTexture({0, 255, 0, 255});
-    auto yAxisMesh = std::make_unique<Mesh>(
-        device, "Y_Axis",
-        createAxisLineVertices({0, -axisLength, 0}, {0, axisLength, 0}, {1, 0, 0}),
-        createAxisLineIndices(), yAxisMaterial, yAxisTextures, currentImageCount);
-    appOwnedMeshes.emplace_back(std::move(yAxisMesh));
-    scene.createNode(
-        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "Y_Axis_Node"},
-        device.descriptorPool_, combinedMeshLayout);
+    auto createAxis = [&](const std::string &name, glm::vec3 start, glm::vec3 end,
+                          std::array<u8, 4> color, glm::vec3 tangent) {
+      Material axisMaterial;
+      PBRTextures axisTextures = textureStore.getAllDefaultTextures();
+      axisTextures.baseColor = textureStore.getColorTexture(color);
+      auto axisMesh = std::make_unique<Mesh>(
+          device, name, createAxisLineVertices(start, end, tangent), createAxisLineIndices(),
+          axisMaterial, axisTextures, currentImageCount);
+      appOwnedMeshes.emplace_back(std::move(axisMesh));
+      scene.createNode(
+          {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = name + "_Node"},
+          device.descriptorPool_, combinedMeshLayout);
+    };
 
-    // Z-Axis (Blue)
-    Material zAxisMaterial;
-    PBRTextures zAxisTextures;
-    zAxisTextures.baseColor = textureStore.getColorTexture({0, 0, 255, 255});
-    auto zAxisMesh = std::make_unique<Mesh>(
-        device, "Z_Axis",
-        createAxisLineVertices({0, 0, -axisLength}, {0, 0, axisLength}, {1, 0, 0}),
-        createAxisLineIndices(), zAxisMaterial, zAxisTextures, currentImageCount);
-    appOwnedMeshes.emplace_back(std::move(zAxisMesh));
-    scene.createNode(
-        {.mesh = appOwnedMeshes.back().get(), .pipeline = linePipeline, .name = "Z_Axis_Node"},
-        device.descriptorPool_, combinedMeshLayout);
+    createAxis("X_Axis", {-axisLength, 0, 0}, {axisLength, 0, 0}, {255, 0, 0, 255}, {0, 1, 0});
+    createAxis("Y_Axis", {0, -axisLength, 0}, {0, axisLength, 0}, {0, 255, 0, 255}, {1, 0, 0});
+    createAxis("Z_Axis", {0, 0, -axisLength}, {0, 0, axisLength}, {0, 0, 255, 255}, {1, 0, 0});
   }
 
   void loadGltfModel(const std::string &filePath, const std::string &baseDir) {
@@ -302,7 +370,8 @@ public:
     EXPECTED_VOID(instance.setupDebugMessenger());
     EXPECTED_VOID(device.pickPhysicalDevice());
     EXPECTED_VOID(device.createLogicalDevice());
-    EXPECTED_VOID(createCombinedMeshDescriptorSetLayout());
+    EXPECTED_VOID(createDescriptorSetLayouts());
+    // SetupSceneLights is now called after the window is created, so we know the frame count.
     auto cacheResult = device.logical().createPipelineCache({});
     if (cacheResult) {
       pipelineCache = std::move(cacheResult.value());
@@ -382,15 +451,57 @@ public:
     check_vk_result_hpp(device.logical().waitForFences(*currentFrame.Fence, VK_TRUE, UINT64_MAX));
     device.logical().resetFences({*currentFrame.Fence});
 
+    // Update UBOs for the current frame
+    {
+      // 1. Scene Lights UBO
+      std::memcpy(sceneLightsUbos[wd.FrameIndex].getMappedData(), &sceneLightsCpuBuffer,
+                  sizeof(SceneLightsUBO));
+
+      // 2. Shader Toggles UBO
+      std::memcpy(shaderTogglesUbos[wd.FrameIndex].getMappedData(), &shaderTogglesCpuBuffer,
+                  sizeof(ShaderTogglesUBO));
+
+      // Update descriptor sets for the current frame
+      vk::DescriptorBufferInfo lightUboInfo{.buffer = sceneLightsUbos[wd.FrameIndex].get(),
+                                            .offset = 0,
+                                            .range = sizeof(SceneLightsUBO)};
+
+      vk::DescriptorBufferInfo togglesUboInfo{.buffer = shaderTogglesUbos[wd.FrameIndex].get(),
+                                              .offset = 0,
+                                              .range = sizeof(ShaderTogglesUBO)};
+
+      std::array<vk::WriteDescriptorSet, 2> writeInfos = {
+          vk::WriteDescriptorSet{
+              .dstSet = *sceneDescriptorSets[wd.FrameIndex],
+              .dstBinding = 0, // Binding 0 for lights
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eUniformBuffer,
+              .pBufferInfo = &lightUboInfo,
+          },
+          vk::WriteDescriptorSet{
+              .dstSet = *sceneDescriptorSets[wd.FrameIndex],
+              .dstBinding = 1, // Binding 1 for toggles
+              .descriptorCount = 1,
+              .descriptorType = vk::DescriptorType::eUniformBuffer,
+              .pBufferInfo = &togglesUboInfo,
+          }};
+      device.logical().updateDescriptorSets(writeInfos, nullptr);
+    }
+
     currentFrame.CommandPool.reset();
     currentFrame.CommandBuffer.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
 
     scene.updateHierarchy(wd.FrameIndex, camera.GetViewMatrix(),
                           camera.GetProjectionMatrix((float)wd.config.swapchainExtent.width /
                                                      (float)wd.config.swapchainExtent.height),
-                          deltaTime); // Use actual deltaTime
+                          deltaTime);
 
     scene.updateAllDescriptorSetContents(wd.FrameIndex);
+
+    currentFrame.CommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                                  *graphicsPipelines[0].pipelineLayout,
+                                                  1, // firstSet = 1
+                                                  {*sceneDescriptorSets[wd.FrameIndex]}, {});
 
     std::array<vk::ClearValue, 2> clearValues{};
     clearValues[0].color = wd.config.ClearValue.color;
@@ -552,10 +663,13 @@ public:
           wd.config.swapchainExtent.height != currentExtent.height) {
         device.logical().waitIdle();
         createOrResizeWindow(instance, device, wd, currentExtent, MIN_IMAGE_COUNT);
+
+        EXPECTED_VOID(SetupSceneLights());
+        EXPECTED_VOID(SetupShaderToggles()); // NEW: Re-create toggles UBOs
+        allocateSceneDescriptorSets();
+
         scene.setImageCount(static_cast<u32>(wd.Frames.size()), device.descriptorPool_,
                             combinedMeshLayout);
-        // for (u32 i = 0; i < wd.Frames.size(); ++i)
-        //   scene.updateAllDescriptorSetContents(i);
         swapChainRebuild = false;
       }
 
@@ -566,13 +680,14 @@ public:
       {
         RenderCameraControlMenu(camera);
         RenderVulkanStateWindow(device, wd, 120, deltaTime);
+        RenderLightControlMenu(sceneLightsCpuBuffer);
+        RenderShaderTogglesMenu(shaderTogglesCpuBuffer);
         RenderSceneHierarchyMaterialEditor(scene, wd.FrameIndex);
       }
 
       ImGui::Render();
       FrameRender(ImGui::GetDrawData(), deltaTime);
       FramePresent();
-      // std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
 
@@ -583,24 +698,27 @@ public:
 
     SetupVulkanWindow(sdl_window, get_window_size(sdl_window));
 
-    u32 numMeshesEstimate = 30;
+    u32 numMeshesEstimate = 50;
 
     EXPECTED_VOID(
         device.createDescriptorPool(static_cast<u32>(wd.Frames.size()) * numMeshesEstimate));
 
     createPipelines();
 
+    EXPECTED_VOID(SetupSceneLights());
+    EXPECTED_VOID(SetupShaderToggles()); // NEW: Setup toggles UBO
+
     scene = Scene(static_cast<u32>(wd.Frames.size()));
-    // loadAndInstanceGltfModel("../assets/models/BoxVertexColors.gltf", "",
-    //                          static_cast<u32>(wd.Frames.size()));
+
     auto future = thread_pool.submit_task([this] {
-      return loadGltfModel("../assets/models/sphinx-3d-model/scene.gltf",
-                           "../assets/models/sphinx-3d-model/");
+      // return loadGltfModel("../assets/models/woman/scene.gltf", "../assets/models/woman/");
+      // return loadGltfModel("../assets/models/sphinx/scene.gltf", "../assets/models/sphinx/");
+      return loadGltfModel("../assets/models/sphinx2/sphinx2.gltf", "");
+      // return loadGltfModel("../assets/models/sarc.glb", "");
     });
     createDebugAxesScene(static_cast<u32>(wd.Frames.size()));
 
-    for (u32 i = 0; i < wd.Frames.size(); ++i)
-      scene.updateAllDescriptorSetContents(i);
+    allocateSceneDescriptorSets();
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -650,8 +768,7 @@ export struct SDL_Wrapper {
       return -1;
     }
     SDL_WindowFlags window_flags =
-        (SDL_WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE |
-                          SDL_WINDOW_HIGH_PIXEL_DENSITY); // Start hidden, show after Vulkan setup
+        (SDL_WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     window = SDL_CreateWindow("Dear ImGui SDL3+Vulkan example", 1280, 720, window_flags);
     if (window == nullptr) {
       std::cerr << "[SDL_Wrapper] Error: SDL_CreateWindow(): " << SDL_GetError() << std::endl;
