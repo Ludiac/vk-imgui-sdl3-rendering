@@ -114,7 +114,7 @@ public:
 
     if (mesh && pipeline && *pipeline->pipeline) {
       mesh->bind(cmd, pipeline, currentImage);
-      mesh->draw(cmd, pipeline, currentImage);
+      mesh->draw(cmd);
     }
   }
 

@@ -15,7 +15,6 @@ import :ModelLoader; // For GltfImageData
 export class TextureStore {
 private:
   VulkanDevice &device_;
-  vk::raii::CommandPool commandPool_{nullptr};
   const vk::raii::Queue &transferQueue_;
 
   // The core change: Use a u32 hash as the key for our texture cache.
@@ -26,18 +25,18 @@ private:
   std::shared_ptr<Texture> defaultEmissiveTexture_;
 
 public:
-  [[nodiscard]] std::expected<void, std::string> createInternalCommandPool() {
-    if (!*device_.logical() || device_.queueFamily_ == static_cast<u32>(-1))
-      return std::unexpected("TS:createPool: Device/QF not init.");
-
-    vk::CommandPoolCreateInfo poolInfo{.flags = vk::CommandPoolCreateFlagBits::eTransient |
-                                                vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-                                       .queueFamilyIndex = device_.queueFamily_};
-    auto poolResult = device_.logical().createCommandPool(poolInfo);
-    if (!poolResult)
-      return std::unexpected("TS:createPool: Pool creation failed: " +
-                             vk::to_string(poolResult.error()));
-    commandPool_ = std::move(poolResult.value());
+  [[nodiscard]] std::expected<void, std::string> createDefaultTextures() {
+    // if (!*device_.logical() || device_.queueFamily_ == static_cast<u32>(-1))
+    //   return std::unexpected("TS:createPool: Device/QF not init.");
+    //
+    // vk::CommandPoolCreateInfo poolInfo{.flags = vk::CommandPoolCreateFlagBits::eTransient |
+    //                                             vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+    //                                    .queueFamilyIndex = device_.queueFamily_};
+    // auto poolResult = device_.logical().createCommandPool(poolInfo);
+    // if (!poolResult)
+    //   return std::unexpected("TS:createPool: Pool creation failed: " +
+    //                          vk::to_string(poolResult.error()));
+    // commandPool_ = std::move(poolResult.value());
 
     // --- Create the default texture and add it to the cache ---
     // As you mentioned, loading this from a file is a great idea for a real app.
@@ -67,10 +66,6 @@ public:
 
   // Load texture from raw pixel data using its hash as the key.
   [[nodiscard]] std::shared_ptr<Texture> getTextureFromData(const GltfImageData &imageData) {
-    if (!*commandPool_) {
-      std::println("TS::getTextureFromData: No command pool. Returning fallback default.");
-      return defaultWhiteTexture_;
-    }
     if (imageData.pixels.empty() || imageData.width == 0 || imageData.height == 0) {
       std::println("TS::getTextureFromData: Invalid image data. Returning fallback default.");
       return defaultWhiteTexture_;
@@ -81,6 +76,7 @@ public:
     const u32 textureHash = XXH32(imageData.pixels.data(), imageData.pixels.size(), 0);
 
     if (auto it = loadedTextures_.find(textureHash); it != loadedTextures_.end()) {
+      std::println("texture already exists {}", imageData.name);
       return it->second; // Texture already exists, return it.
     }
 
@@ -102,7 +98,7 @@ public:
     auto texResult = createTexture( // This is your existing createTexture from vulkan_app:texture
         device_, imageData.pixels.data(), imageData.pixels.size(),
         vk::Extent3D{static_cast<u32>(imageData.width), static_cast<u32>(imageData.height), 1},
-        format, commandPool_, transferQueue_,
+        format, transferQueue_,
         true // generateMipmaps
     );
 
@@ -122,9 +118,6 @@ public:
   [[nodiscard]] std::shared_ptr<Texture>
   getColorTexture(const std::array<uint8_t, 4> &color,
                   vk::Format format = vk::Format::eR8G8B8A8Srgb) {
-    if (!*commandPool_)
-      return defaultWhiteTexture_;
-
     // --- HASHING LOGIC for color ---
     const u32 colorHash = XXH32(color.data(), color.size(), 0);
 
@@ -134,7 +127,7 @@ public:
 
     // Create a 1x1 texture for the solid color
     auto texResult = createTexture(device_, color.data(), color.size(), {1, 1, 1}, format,
-                                   commandPool_, transferQueue_, false);
+                                   transferQueue_, false);
     if (texResult) {
       auto newTex = std::make_shared<Texture>(std::move(*texResult));
       loadedTextures_[colorHash] = newTex;

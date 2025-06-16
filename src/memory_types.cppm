@@ -17,6 +17,9 @@ export struct VmaBuffer {
   vk::DeviceSize size_ = 0;
   void *pMappedData_ = nullptr;
 
+  vk::Buffer &operator*() { return buffer_; }
+  const vk::Buffer &operator*() const { return buffer_; }
+
   VmaBuffer() = default;
 
   VmaBuffer(vma::Allocator allocator, vk::Buffer buffer, vma::Allocation allocation,

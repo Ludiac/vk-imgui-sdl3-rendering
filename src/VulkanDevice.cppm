@@ -45,9 +45,39 @@ private:
     return (u32)-1;
   }
 
+  [[nodiscard]] std::expected<void, std::string>
+  executeSingleTimeCommands(std::function<void(vk::CommandBuffer)> recordCommands) {
+    vk::CommandBufferAllocateInfo allocInfo{.commandPool = *transientCommandPool_,
+                                            .level = vk::CommandBufferLevel::ePrimary,
+                                            .commandBufferCount = 1};
+
+    auto cmdBuffersResult = device_.allocateCommandBuffers(allocInfo);
+    if (!cmdBuffersResult) {
+      return std::unexpected("Failed to allocate single-time command buffer: " +
+                             vk::to_string(cmdBuffersResult.error()));
+    }
+
+    vk::raii::CommandBuffer commandBuffer = std::move(cmdBuffersResult.value().front());
+
+    vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+    commandBuffer.begin(beginInfo);
+
+    recordCommands(commandBuffer);
+
+    commandBuffer.end();
+
+    vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer};
+
+    queue_.submit(submitInfo, {});
+    queue_.waitIdle();
+
+    return {};
+  }
+
 public:
   const vk::raii::Device &logical() const { return device_; }
   const vk::raii::PhysicalDevice &physical() const { return physicalDevice_; }
+  const vma::Allocator &allocator() const { return vmaAllocator_; }
 
   ~VulkanDevice() { vmaAllocator_.destroy(); }
 
@@ -95,8 +125,12 @@ public:
     queue_info[0].pQueuePriorities = queue_priority;
 
     vk::PhysicalDeviceFeatures enabledFeatures{};
+    vk::PhysicalDeviceVulkan11Features enabledFeatures11{
+        .shaderDrawParameters = true,
+    };
     enabledFeatures.samplerAnisotropy = true;
     if (auto expected = physicalDevice_.createDevice({
+            .pNext = &enabledFeatures11,
             .queueCreateInfoCount = sizeof(queue_info) / sizeof(queue_info[0]),
             .pQueueCreateInfos = queue_info,
             .enabledExtensionCount = static_cast<u32>(deviceExtensions.size()),
@@ -146,7 +180,9 @@ public:
         {vk::DescriptorType::eUniformBuffer, app_uniform_buffers},
         {vk::DescriptorType::eUniformBufferDynamic, app_dynamic_uniform_buffers},
         {vk::DescriptorType::eCombinedImageSampler,
-         app_combined_image_samplers + IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE}};
+         app_combined_image_samplers + IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE},
+        {vk::DescriptorType::eStorageBuffer, 30},
+    };
 
     u32 application_max_sets = imageCountBasedFactor * 2;
 
@@ -309,5 +345,13 @@ public:
     }
 
     return {};
+  }
+
+  [[nodiscard]] std::expected<void, std::string>
+  copyBuffer(vk::Buffer srcBuffer, vk::Buffer dstBuffer, vk::DeviceSize size) {
+    return executeSingleTimeCommands([&](vk::CommandBuffer cmdBuffer) {
+      vk::BufferCopy copyRegion{.srcOffset = 0, .dstOffset = 0, .size = size};
+      cmdBuffer.copyBuffer(srcBuffer, dstBuffer, copyRegion);
+    });
   }
 };

@@ -37,6 +37,12 @@ CPMAddPackage(
 )
 
 CPMAddPackage(
+    NAME freeType
+    GITHUB_REPOSITORY freetype/freetype
+    GIT_TAG 1529bc6
+)
+
+CPMAddPackage(
     NAME xxHash
     GITHUB_REPOSITORY Cyan4973/xxHash
     GIT_TAG b5694e436dc9fc1c5a0389ac46b446167075490a
@@ -93,12 +99,14 @@ target_sources(AppModule
         ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/src/vk_mem_alloc.cppm
         ${bsThreadPool_SOURCE_DIR}/modules/BS.thread_pool.cppm
         src/tinygltf_module_wrapper.cppm
+        src/SDL_Wrapper.cppm
         src/app.cppm
         src/utils.cppm
         src/VulkanWindow.cppm
         src/VulkanDevice.cppm
         src/VulkanInstance.cppm
         src/VulkanPipeline.cppm
+        src/UIRenderer.cppm
         src/ModelLoader.cppm
         src/types.cppm
         src/memory_types.cppm
@@ -107,6 +115,8 @@ target_sources(AppModule
         src/SceneBuilder.cppm
         src/texture.cppm
         src/TextureStore.cppm
+        src/text.cppm
+        src/TextRenderer.cppm
         src/imgui.cppm
 )
 
@@ -125,6 +135,7 @@ target_sources(AppModule
 target_include_directories(AppModule PRIVATE
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
+  ${freeType_SOURCE_DIR}/include
   ${tinygltf_SOURCE_DIR}
   ${SDL3_INCLUDE_DIRS}
   ${VulkanMemoryAllocatorHpp_SOURCE_DIR}/VulkanMemoryAllocator/include
@@ -133,6 +144,7 @@ target_include_directories(AppModule PRIVATE
 )
 
 target_link_libraries(AppModule PRIVATE
+    freetype
     SDL3::SDL3
     Vulkan::Vulkan
     tinygltf
@@ -148,33 +160,43 @@ target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
 target_link_libraries(${PROJECT_NAME} PRIVATE AppModule)
 
 set(SHADER_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/shaders)
-set(VERT_SPV ${SHADER_OUTPUT_DIR}/vert.spv)
-set(FRAG_SPV ${SHADER_OUTPUT_DIR}/frag.spv)
 
 # Create the output directory if it doesn't exist
 file(MAKE_DIRECTORY ${SHADER_OUTPUT_DIR})
 
-add_custom_command(
-    OUTPUT ${VERT_SPV} ${FRAG_SPV}
-    COMMAND slangc -o ${VERT_SPV}
-                   -profile glsl_460
-                   -entry main
-                   -stage vertex
-# -capability spvSparseResidency
-                   ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vert.slang
-    COMMAND slangc -o ${FRAG_SPV}
-                   -profile glsl_460
-                   -entry main
-                   -stage fragment
-# -capability spvSparseResidency # Note: This was spvSparseResidency, ensure it's correct for frag if needed
-                   ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.slang
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vert.slang
-            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.slang
-    COMMENT "Compiling Slang shaders to SPIR-V"
-)
+# Function to compile a single Slang shader to SPIR-V
+# Usage: compile_shader(<target_name> <source_path> <stage> <output_name>)
+function(compile_shader target_name source_path stage output_name)
+    set(output_file ${SHADER_OUTPUT_DIR}/${output_name}.spv)
 
-add_custom_target(CompileShaders ALL
-    DEPENDS ${VERT_SPV} ${FRAG_SPV}
-)
+    add_custom_command(
+        OUTPUT ${output_file}
+        COMMAND slangc -o ${output_file}
+                       -profile glsl_460
+                       -entry main
+                       -stage ${stage}
+                       ${source_path}
+        DEPENDS ${source_path}
+        COMMENT "Compiling ${source_path} to ${output_file} as ${stage}"
+    )
 
-add_dependencies(${PROJECT_NAME} CompileShaders)
+    add_custom_target(${target_name} ALL
+        DEPENDS ${output_file}
+    )
+
+    add_dependencies(${PROJECT_NAME} ${target_name})
+endfunction()
+
+# === Usage Examples ===
+
+# Compile vert.slang as vertex shader to vert.spv
+compile_shader(CompileVertShader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vert.slang vertex vert)
+
+# Compile frag.slang as fragment shader to frag.spv
+compile_shader(CompileFragShader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/frag.slang fragment frag)
+
+# Compile text_vert.slang as vertex shader to text_vert.spv
+compile_shader(CompileTextVertShader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/text_vert.slang vertex text_vert)
+
+# Compile text_frag.slang as fragment shader to text_frag.spv
+compile_shader(CompileTextFragShader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/text_frag.slang fragment text_frag)

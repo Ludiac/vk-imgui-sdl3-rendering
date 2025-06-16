@@ -63,11 +63,18 @@ export struct VulkanPipeline {
 
   [[nodiscard]] std::expected<void, std::string>
   createPipelineLayout(const vk::raii::Device &device,
-                       std::span<vk::DescriptorSetLayout> descriptorSetLayouts) NOEXCEPT {
+                       const std::vector<vk::DescriptorSetLayout> &descriptorSetLayouts,
+                       const std::vector<vk::PushConstantRange> &pushConstantRanges) NOEXCEPT {
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
         .setLayoutCount = static_cast<u32>(descriptorSetLayouts.size()),
         .pSetLayouts = descriptorSetLayouts.data(),
     };
+
+    if (!pushConstantRanges.empty()) {
+      std::println("not empty");
+      pipelineLayoutInfo.pushConstantRangeCount = static_cast<u32>(pushConstantRanges.size());
+      pipelineLayoutInfo.pPushConstantRanges = pushConstantRanges.data();
+    }
 
     auto layoutResult = device.createPipelineLayout(pipelineLayoutInfo);
     if (!layoutResult) {
@@ -78,31 +85,34 @@ export struct VulkanPipeline {
     return {};
   }
 
-  [[nodiscard]] std::expected<void, std::string>
-  createGraphicsPipeline(const vk::raii::Device &device,
-                         const vk::raii::PipelineCache &pipelineCache,
-                         std::vector<vk::PipelineShaderStageCreateInfo> shaderStages,
-                         vk::PipelineInputAssemblyStateCreateInfo inputAssembly,
-                         const vk::raii::RenderPass &renderPass) NOEXCEPT {
-    vk::VertexInputBindingDescription bindingDescription{
-        .binding = 0,
-        .stride = sizeof(Vertex),
-        .inputRate = vk::VertexInputRate::eVertex,
-    };
+  [[nodiscard]] std::expected<void, std::string> createGraphicsPipeline(
+      const vk::raii::Device &device, const vk::raii::PipelineCache &pipelineCache,
+      std::vector<vk::PipelineShaderStageCreateInfo> shaderStages,
+      vk::PipelineVertexInputStateCreateInfo vertexInputInfo, // Pass this in now
+      vk::PipelineInputAssemblyStateCreateInfo inputAssembly,
+      const vk::raii::RenderPass &renderPass,
+      vk::PipelineColorBlendAttachmentState *colorBlendAttachmentOverride = nullptr, // NEW
+      vk::PipelineDepthStencilStateCreateInfo *depthStencilStateOverride = nullptr   // NEW
+      ) NOEXCEPT {
+    // vk::VertexInputBindingDescription bindingDescription{
+    //     .binding = 0,
+    //     .stride = sizeof(Vertex),
+    //     .inputRate = vk::VertexInputRate::eVertex,
+    // };
 
-    std::array<vk::VertexInputAttributeDescription, 4> attributes = {{
-        {0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
-        {1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)},
-        {2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv)},
-        {3, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(Vertex, tangent)},
-    }};
-
-    vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
-        .vertexBindingDescriptionCount = 1,
-        .pVertexBindingDescriptions = &bindingDescription,
-        .vertexAttributeDescriptionCount = static_cast<u32>(attributes.size()),
-        .pVertexAttributeDescriptions = attributes.data(),
-    };
+    // std::array<vk::VertexInputAttributeDescription, 4> attributes = {{
+    //     {0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
+    //     {1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)},
+    //     {2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv)},
+    //     {3, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(Vertex, tangent)},
+    // }};
+    //
+    // vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
+    //     .vertexBindingDescriptionCount = 1,
+    //     .pVertexBindingDescriptions = &bindingDescription,
+    //     .vertexAttributeDescriptionCount = static_cast<u32>(attributes.size()),
+    //     .pVertexAttributeDescriptions = attributes.data(),
+    // };
 
     vk::PipelineViewportStateCreateInfo viewportState{
         .viewportCount = 1,
@@ -125,17 +135,35 @@ export struct VulkanPipeline {
         .sampleShadingEnable = false,
     };
 
-    vk::PipelineDepthStencilStateCreateInfo depthStencilState{
+    // vk::PipelineDepthStencilStateCreateInfo depthStencilState{
+    //     .depthTestEnable = true,
+    //     .depthWriteEnable = true,
+    //     .depthCompareOp = vk::CompareOp::eLess,
+    //     .depthBoundsTestEnable = false,
+    //     .stencilTestEnable = false,
+    //
+    // };
+
+    vk::PipelineDepthStencilStateCreateInfo defaultDepthStencilState{
         .depthTestEnable = true,
         .depthWriteEnable = true,
         .depthCompareOp = vk::CompareOp::eLess,
-        .depthBoundsTestEnable = false,
-        .stencilTestEnable = false,
-
     };
 
-    vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-        .blendEnable = false, // No blending for opaque objects initially
+    // vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+    //     .blendEnable = false, // No blending for opaque objects initially
+    //     .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+    //                       vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+    // };
+    //
+    // vk::PipelineColorBlendStateCreateInfo colorBlending{
+    //     .logicOpEnable = false,
+    //     .attachmentCount = 1,
+    //     .pAttachments = &colorBlendAttachment,
+    // };
+
+    vk::PipelineColorBlendAttachmentState defaultColorBlendAttachment{
+        .blendEnable = false,
         .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
     };
@@ -143,7 +171,8 @@ export struct VulkanPipeline {
     vk::PipelineColorBlendStateCreateInfo colorBlending{
         .logicOpEnable = false,
         .attachmentCount = 1,
-        .pAttachments = &colorBlendAttachment,
+        .pAttachments = colorBlendAttachmentOverride ? colorBlendAttachmentOverride
+                                                     : &defaultColorBlendAttachment,
     };
 
     std::vector<vk::DynamicState> dynamicStates = {
@@ -164,7 +193,8 @@ export struct VulkanPipeline {
         .pViewportState = &viewportState,
         .pRasterizationState = &rasterizer,
         .pMultisampleState = &multisampling,
-        .pDepthStencilState = &depthStencilState,
+        .pDepthStencilState =
+            depthStencilStateOverride ? depthStencilStateOverride : &defaultDepthStencilState,
         .pColorBlendState = &colorBlending,
         .pDynamicState = &dynamicState,
         .layout = *pipelineLayout,

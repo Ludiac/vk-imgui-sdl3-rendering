@@ -13,6 +13,7 @@ module;
 // #include <glm/gtx/string_cast.hpp>
 
 export module vulkan_app;
+export import :SDLWrapper;
 
 import vulkan_hpp;
 import std;
@@ -30,9 +31,29 @@ import :TextureStore;
 import :ModelLoader;
 import :SceneBuilder;
 import :imgui;
+import :TextRenderer;
 
 namespace {                        // Anonymous namespace for internal linkage
 constexpr u32 MIN_IMAGE_COUNT = 2; // Renamed from minImageCount to avoid conflict
+
+std::vector<Vertex> createQuadVertices(const glm::vec3 &center, float width, float height,
+                                       const glm::vec3 &normal) {
+  float halfW = width / 2.0f;
+  float halfH = height / 2.0f;
+  return {
+      // Bottom-left
+      {center + glm::vec3(-halfW, -halfH, 0.0f), normal, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+      // Bottom-right
+      {center + glm::vec3(halfW, -halfH, 0.0f), normal, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+      // Top-left
+      {center + glm::vec3(-halfW, halfH, 0.0f), normal, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+      // Top-right
+      {center + glm::vec3(halfW, halfH, 0.0f), normal, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}};
+}
+
+std::vector<u32> createQuadIndices() {
+  return {0, 1, 2, 1, 3, 2}; // Two triangles
+}
 
 std::vector<Vertex> createAxisLineVertices(const glm::vec3 &start, const glm::vec3 &end,
                                            const glm::vec3 &normal_placeholder) {
@@ -74,6 +95,7 @@ export class App {
 
   // Rendering Resources
   std::vector<VulkanPipeline> graphicsPipelines; // You might have multiple pipelines
+  VulkanPipeline textPipeline;                   // You might have multiple pipelines
   vk::raii::PipelineCache pipelineCache{nullptr};
   vk::raii::DescriptorSetLayout combinedMeshLayout{nullptr}; // Single layout for meshes
 
@@ -92,6 +114,9 @@ export class App {
   std::vector<std::unique_ptr<Mesh>> appOwnedMeshes; // App owns all mesh objects
 
   Camera camera;
+
+  FontAtlasData mainFont;
+  std::unique_ptr<TextRenderer> textRenderer;
 
   BS::thread_pool<> thread_pool;
   std::vector<LoadedGltfScene> loadedGltfData;
@@ -184,16 +209,50 @@ public:
     sceneDescriptorSets = device.logical().allocateDescriptorSets(allocInfo).value();
   }
 
-  void createPipelines() { // Simplified pipeline creation
+  void createGraphicsPipelines() { // Simplified pipeline creation
     if (graphicsPipelines.empty()) {
-
-      graphicsPipelines.resize(2); // For now, one main pipeline
+      graphicsPipelines.resize(2);
     }
+
+    vk::VertexInputBindingDescription bindingDescription{
+        .binding = 0,
+        .stride = sizeof(Vertex),
+        .inputRate = vk::VertexInputRate::eVertex,
+    };
+
+    std::array<vk::VertexInputAttributeDescription, 4> attributes = {{
+        {0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
+        {1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)},
+        {2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv)},
+        {3, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(Vertex, tangent)},
+    }};
+
+    vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &bindingDescription,
+        .vertexAttributeDescriptionCount = static_cast<u32>(attributes.size()),
+        .pVertexAttributeDescriptions = attributes.data(),
+    };
+
+    vk::PipelineDepthStencilStateCreateInfo depthStencilState{
+        .depthTestEnable = true,
+        .depthWriteEnable = true,
+        .depthCompareOp = vk::CompareOp::eLess,
+        .depthBoundsTestEnable = false,
+        .stencilTestEnable = false,
+    };
+
+    vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+        .blendEnable = false, // No blending for opaque objects initially
+        .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+    };
+
     VulkanPipeline &mainPipeline = graphicsPipelines[0];
 
     std::vector<vk::DescriptorSetLayout> layouts = {*combinedMeshLayout, *sceneLayout};
-
-    EXPECTED_VOID(mainPipeline.createPipelineLayout(device.logical(), layouts));
+    std::vector<vk::PushConstantRange> noConstantRanges = {};
+    EXPECTED_VOID(mainPipeline.createPipelineLayout(device.logical(), layouts, noConstantRanges));
 
     auto vertShaderModule = createShaderModuleFromFile(device.logical(), "shaders/vert.spv");
     auto fragShaderModule = createShaderModuleFromFile(device.logical(), "shaders/frag.spv");
@@ -216,16 +275,117 @@ public:
         .topology = vk::PrimitiveTopology::eTriangleList, .primitiveRestartEnable = false};
 
     EXPECTED_VOID(mainPipeline.createGraphicsPipeline(device.logical(), pipelineCache, shaderStages,
-                                                      inputAssembly, wd.RenderPass));
+                                                      vertexInputInfo, inputAssembly, wd.RenderPass,
+                                                      &colorBlendAttachment, &depthStencilState));
 
     VulkanPipeline &linePipeline = graphicsPipelines[1];
-    EXPECTED_VOID(
-        linePipeline.createPipelineLayout(device.logical(), layouts)); // Reusing same layout
+    EXPECTED_VOID(linePipeline.createPipelineLayout(device.logical(), layouts,
+                                                    noConstantRanges)); // Reusing same layout
 
     vk::PipelineInputAssemblyStateCreateInfo lineInputAssembly{
         .topology = vk::PrimitiveTopology::eLineList, .primitiveRestartEnable = false};
-    EXPECTED_VOID(linePipeline.createGraphicsPipeline(device.logical(), pipelineCache, shaderStages,
-                                                      lineInputAssembly, wd.RenderPass));
+    EXPECTED_VOID(linePipeline.createGraphicsPipeline(
+        device.logical(), pipelineCache, shaderStages, vertexInputInfo, lineInputAssembly,
+        wd.RenderPass, &colorBlendAttachment, &depthStencilState));
+  }
+
+  void createTextPipeline(u32 imageCount) {
+    auto textVertShader = createShaderModuleFromFile(device.logical(), "shaders/text_vert.spv");
+    auto textFragShader = createShaderModuleFromFile(device.logical(), "shaders/text_frag.spv");
+    if (!textVertShader || !textFragShader) {
+      std::println("Error loading text shaders.");
+      return;
+    }
+
+    // A simple descriptor set layout: just one texture sampler for the font atlas
+    std::vector<vk::DescriptorSetLayoutBinding> textBindings = {
+        {// Binding 0: Font Atlas Sampler (Fragment Shader)
+         .binding = 0,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eFragment}};
+    vk::DescriptorSetLayoutCreateInfo textLayoutInfo{.bindingCount = (u32)textBindings.size(),
+                                                     .pBindings = textBindings.data()};
+    auto textSetLayout = device.logical().createDescriptorSetLayout(textLayoutInfo).value();
+
+    std::vector<vk::DescriptorSetLayoutBinding> instanceBindings = {
+        {.binding = 0,
+         .descriptorType = vk::DescriptorType::eStorageBuffer,
+         .descriptorCount = 1,
+         .stageFlags = vk::ShaderStageFlagBits::eVertex}};
+
+    vk::DescriptorSetLayoutCreateInfo instanceLayoutInfo{
+        .bindingCount = static_cast<uint32_t>(instanceBindings.size()),
+        .pBindings = instanceBindings.data()};
+
+    auto instanceSetLayout = device.logical().createDescriptorSetLayout(instanceLayoutInfo).value();
+    // The text pipeline layout will also use a push constant to send per-quad data like color.
+    vk::PushConstantRange pushConstantRange{
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        .offset = 0,
+        .size = sizeof(TextPushConstants) // We will push a color vector
+    };
+
+    std::vector<vk::DescriptorSetLayout> textLayouts = {*textSetLayout, *instanceSetLayout};
+    std::vector<vk::PushConstantRange> constantRanges = {pushConstantRange};
+    EXPECTED_VOID(textPipeline.createPipelineLayout(device.logical(), textLayouts, constantRanges));
+
+    std::vector<vk::PipelineShaderStageCreateInfo> textShaderStages = {
+        {.stage = vk::ShaderStageFlagBits::eVertex,
+         .module = *textVertShader.value(),
+         .pName = "main"},
+        {.stage = vk::ShaderStageFlagBits::eFragment,
+         .module = *textFragShader.value(),
+         .pName = "main"}};
+
+    // Vertex input for our simple text quad (pos and uv)
+    vk::VertexInputBindingDescription textBindingDesc{0, sizeof(TextQuadVertex),
+                                                      vk::VertexInputRate::eVertex};
+    std::array<vk::VertexInputAttributeDescription, 2> textAttrDesc = {{
+        {0, 0, vk::Format::eR32G32Sfloat, 0},                            // Position (vec2)
+        {1, 0, vk::Format::eR32G32Sfloat, offsetof(TextQuadVertex, uv)}, // UV (vec2)
+    }};
+    vk::PipelineVertexInputStateCreateInfo textVertexInputInfo{
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &textBindingDesc,
+        .vertexAttributeDescriptionCount = 2,
+        .pVertexAttributeDescriptions = textAttrDesc.data()};
+
+    // Standard triangle list input assembly
+    vk::PipelineInputAssemblyStateCreateInfo textInputAssembly{
+        .topology = vk::PrimitiveTopology::eTriangleList};
+
+    // --- Key difference: Color Blending for text ---
+    vk::PipelineColorBlendAttachmentState textBlendAttachment{
+        .blendEnable = true,
+        .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
+        .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+        .colorBlendOp = vk::BlendOp::eAdd,
+        .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+        .dstAlphaBlendFactor = vk::BlendFactor::eZero,
+        .alphaBlendOp = vk::BlendOp::eAdd,
+        .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
+
+    // --- Key difference: NO Depth Testing for UI/text ---
+    vk::PipelineDepthStencilStateCreateInfo textDepthStencilState{
+        .depthTestEnable = false,
+        .depthWriteEnable = false, // Don't write to depth buffer
+    };
+
+    // Call your createGraphicsPipeline function, but pass in the modified states
+    EXPECTED_VOID(textPipeline.createGraphicsPipeline(
+        device.logical(), pipelineCache, textShaderStages, textVertexInputInfo, textInputAssembly,
+        wd.RenderPass,
+        &textBlendAttachment,  // Pass pointer to custom blend state
+        &textDepthStencilState // Pass pointer to custom depth state
+        ));
+
+    if (imageCount == 0) {
+      std::println("kys");
+    }
+    textRenderer = std::make_unique<TextRenderer>(device, mainFont, imageCount, textSetLayout,
+                                                  device.descriptorPool_, device.queue_);
   }
 
   // NEW: Function to set up the shader toggles UBO
@@ -280,6 +440,34 @@ public:
     }
 
     return {};
+  }
+
+  void createDebugFontAtlasQuad(u32 currentImageCount) {
+    if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
+      std::println("Error: Main pipeline not initialized for debug quad.");
+      return;
+    }
+
+    // Create quad geometry
+    glm::vec3 center(0.0f, 0.0f, -5.0f); // Position in front of camera
+    float width = mainFont.atlasWidth;
+    float height = mainFont.atlasHeight;
+    glm::vec3 normal(0.0f, 0.0f, 1.0f);
+
+    Material quadMaterial;
+    PBRTextures quadTextures = textureStore.getAllDefaultTextures();
+    quadTextures.baseColor = textRenderer->getFontTexture();
+
+    auto quadMesh = std::make_unique<Mesh>(
+        device, "DebugFontAtlasQuad", createQuadVertices(center, width / 32, height / 32, normal),
+        createQuadIndices(), quadMaterial, quadTextures, currentImageCount);
+
+    appOwnedMeshes.emplace_back(std::move(quadMesh));
+
+    scene.createNode({.mesh = appOwnedMeshes.back().get(),
+                      .pipeline = &graphicsPipelines[0], // Use main textured pipeline
+                      .name = "DebugFontAtlasQuad_Node"},
+                     device.descriptorPool_, combinedMeshLayout);
   }
 
   void createDebugAxesScene(u32 currentImageCount) {
@@ -371,12 +559,19 @@ public:
     EXPECTED_VOID(device.pickPhysicalDevice());
     EXPECTED_VOID(device.createLogicalDevice());
     EXPECTED_VOID(createDescriptorSetLayouts());
-    // SetupSceneLights is now called after the window is created, so we know the frame count.
     auto cacheResult = device.logical().createPipelineCache({});
     if (cacheResult) {
       pipelineCache = std::move(cacheResult.value());
     }
-    EXPECTED_VOID(textureStore.createInternalCommandPool());
+    EXPECTED_VOID(textureStore.createDefaultTextures());
+
+    auto fontResult =
+        createFontAtlas("../assets/fonts/Inconsolata/InconsolataNerdFontMono-Regular.ttf", 48);
+    if (!fontResult) {
+      std::println("{}", fontResult.error());
+      std::exit(1);
+    }
+    mainFont = std::move(fontResult.value());
   }
 
   void SetupVulkanWindow(SDL_Window *sdl_window, vk::Extent2D extent) {
@@ -517,11 +712,30 @@ public:
         vk::SubpassContents::eInline);
 
     currentFrame.CommandBuffer.setViewport(
-        0, vk::Viewport{0.0f, 0.0f, (float)wd.config.swapchainExtent.width,
-                        (float)wd.config.swapchainExtent.height, 0.0f, 1.0f});
+        0, vk::Viewport{0.0f, 0.0f, static_cast<float>(wd.config.swapchainExtent.width),
+                        static_cast<float>(wd.config.swapchainExtent.height), 0.0f, 1.0f});
     currentFrame.CommandBuffer.setScissor(0, vk::Rect2D{{0, 0}, wd.config.swapchainExtent});
 
     scene.draw(currentFrame.CommandBuffer, wd.FrameIndex);
+
+    Sheet sheet1{};
+
+    textRenderer->queueText("Hello, Vulkan!", 100.f, 200.f, {1.f, 1.f, 1.f, 1.f});
+    textRenderer->queueText("Vulkan?", 200.f, 100.f, {0.f, 0.f, 1.f, 1.f});
+
+    textRenderer->draw(currentFrame.CommandBuffer, textPipeline, wd.config.swapchainExtent,
+                       wd.FrameIndex);
+    // textRenderer->addCharacters("ABCDEFabcdef1234!@#$%",
+    //                             200.0f, // x position
+    //                             100.0f  // y position
+    // );
+    // textRenderer->addCharacters("56789",
+    //                             200.0f, // x position
+    //                             200.0f  // y position
+    // );
+    // textRenderer->renderText(currentFrame.CommandBuffer, textPipeline,
+    //                          glm::vec4(1.f, 1.f, 1.f, 1.0f), // color (white)
+    //                          wd.config.swapchainExtent, wd.FrameIndex);
 
     ImGui_ImplVulkan_RenderDrawData(draw_data, *currentFrame.CommandBuffer);
 
@@ -586,7 +800,8 @@ public:
       cam.Position -= cam.WorldUp * velocity;
   }
 
-  void updateCamera(float dt) {
+  void readKeyboard(float dt, SDL_Window *sdl_window) {
+    static bool isFullscreen = false;
     const auto keystate = SDL_GetKeyboardState(nullptr);
     if (keystate[SDL_SCANCODE_W])
       ProcessKeyboard(camera, SDL_SCANCODE_W, dt);
@@ -600,6 +815,19 @@ public:
       ProcessKeyboard(camera, SDL_SCANCODE_SPACE, dt);
     if (keystate[SDL_SCANCODE_LCTRL])
       ProcessKeyboard(camera, SDL_SCANCODE_LCTRL, dt);
+    if (keystate[SDL_SCANCODE_F11]) {
+      std::println("pressed f11");
+      isFullscreen = !isFullscreen;
+      if (isFullscreen) {
+        SDL_SetWindowFullscreenMode(sdl_window, nullptr); // Fullscreen desktop
+        SDL_SetWindowFullscreen(sdl_window, true);
+        SDL_SyncWindow(sdl_window);
+      } else {
+        SDL_SetWindowFullscreenMode(sdl_window, nullptr); // Exit fullscreen
+        SDL_SetWindowFullscreen(sdl_window, false);
+        SDL_SyncWindow(sdl_window);
+      }
+    }
   }
 
   void mainLoop(SDL_Window *sdl_window) {
@@ -621,14 +849,12 @@ public:
       while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL3_ProcessEvent(&event);
         if (event.type == SDL_EVENT_QUIT) {
-
           done = true;
         }
         if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
             event.window.windowID == SDL_GetWindowID(sdl_window)) {
           done = true;
         }
-
         if (event.type == SDL_EVENT_WINDOW_MINIMIZED) {
         }
         if (event.type == SDL_EVENT_WINDOW_RESTORED) {
@@ -645,7 +871,7 @@ public:
         instanceGltfModel(scene, wd.Frames.size());
       }
 
-      updateCamera(deltaTime);
+      readKeyboard(deltaTime, sdl_window);
       camera.updateVectors();
 
       if (SDL_GetWindowFlags(sdl_window) & SDL_WINDOW_MINIMIZED) {
@@ -703,17 +929,20 @@ public:
     EXPECTED_VOID(
         device.createDescriptorPool(static_cast<u32>(wd.Frames.size()) * numMeshesEstimate));
 
-    createPipelines();
+    createGraphicsPipelines();
+    createTextPipeline(wd.Frames.size());
 
     EXPECTED_VOID(SetupSceneLights());
     EXPECTED_VOID(SetupShaderToggles()); // NEW: Setup toggles UBO
 
     scene = Scene(static_cast<u32>(wd.Frames.size()));
 
+    createDebugFontAtlasQuad(static_cast<u32>(wd.Frames.size()));
+
     auto future = thread_pool.submit_task([this] {
       // return loadGltfModel("../assets/models/woman/scene.gltf", "../assets/models/woman/");
       // return loadGltfModel("../assets/models/sphinx/scene.gltf", "../assets/models/sphinx/");
-      return loadGltfModel("../assets/models/sphinx2/sphinx2.gltf", "");
+      // return loadGltfModel("../assets/models/sphinx2/sphinx2.gltf", "");
       // return loadGltfModel("../assets/models/sarc.glb", "");
     });
     createDebugAxesScene(static_cast<u32>(wd.Frames.size()));
@@ -752,38 +981,5 @@ public:
     ImGui::DestroyContext();
 
     return 0;
-  }
-};
-
-export struct SDL_Wrapper {
-  SDL_Window *window{nullptr};
-
-  int init() {
-    if constexpr (VK_USE_PLATFORM_WAYLAND_KHR) {
-      SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "wayland");
-    }
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-      std::cerr << "[SDL_Wrapper] Error: SDL_Init(): " << SDL_GetError() << std::endl;
-
-      return -1;
-    }
-    SDL_WindowFlags window_flags =
-        (SDL_WindowFlags)(SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    window = SDL_CreateWindow("Dear ImGui SDL3+Vulkan example", 1280, 720, window_flags);
-    if (window == nullptr) {
-      std::cerr << "[SDL_Wrapper] Error: SDL_CreateWindow(): " << SDL_GetError() << std::endl;
-
-      return -1;
-    }
-    return 0;
-  }
-
-  void terminate() {
-    if (window) {
-      SDL_DestroyWindow(window);
-      window = nullptr;
-    }
-    SDL_PumpEvents(); // Process any pending events
-    SDL_Quit();
   }
 };

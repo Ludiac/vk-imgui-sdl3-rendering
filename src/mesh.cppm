@@ -320,14 +320,15 @@ public:
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipeline->pipelineLayout, 0,
                            {*descriptorSets[currentImage]}, {});
   }
-  void draw(vk::raii::CommandBuffer &cmd, VulkanPipeline * /*pipeline*/,
-            u32 /*currentImage*/) const {
+
+  void draw(vk::raii::CommandBuffer &cmd) const {
     if (indexCount > 0) {
       cmd.drawIndexed(indexCount, 1, 0, 0, 0);
     } else if (!vertices_data.empty()) {
     } else {
     }
   }
+
   [[nodiscard]] std::expected<void, std::string>
   setImageCount(u32 newCount, const vk::raii::DescriptorPool &pool,
                 const vk::raii::DescriptorSetLayout &layout) NOEXCEPT {

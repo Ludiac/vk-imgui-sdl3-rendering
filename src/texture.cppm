@@ -105,9 +105,7 @@ void generateMipmaps(VulkanDevice &vulkanDevice, const vk::raii::CommandBuffer &
 
 export [[nodiscard]] std::expected<Texture, std::string>
 createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize imageSize,
-              vk::Extent3D texExtent, vk::Format texFormat,
-
-              vk::raii::CommandPool &commandPool, const vk::raii::Queue &transferQueue,
+              vk::Extent3D texExtent, vk::Format texFormat, const vk::raii::Queue &transferQueue,
               bool generateMipmaps = true, vk::ImageUsageFlags additionalImageUsage = {},
               vk::ImageCreateFlags imageCreateFlags = {}, u32 arrayLayers = 1,
               vk::ImageViewType viewType = vk::ImageViewType::e2D,
@@ -299,8 +297,7 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
 
 // Creates a simple, default 1x1 texture with a specified color.
 export [[nodiscard]] std::expected<Texture, std::string>
-createDefaultTexture(VulkanDevice &vulkanDevice, vk::raii::CommandPool &commandPool,
-                     const vk::raii::Queue &transferQueue,
+createDefaultTexture(VulkanDevice &vulkanDevice, const vk::raii::Queue &transferQueue,
                      vk::Format format = vk::Format::eR8G8B8A8Unorm,
                      std::array<uint8_t, 4> color = {255, 255, 255, 255},
                      const vk::SamplerCreateInfo *pCustomSamplerInfo = nullptr) {
@@ -326,6 +323,6 @@ createDefaultTexture(VulkanDevice &vulkanDevice, vk::raii::CommandPool &commandP
 
   vk::DeviceSize imageSize = pixels.size();
 
-  return createTexture(vulkanDevice, pixels.data(), imageSize, extent, format, commandPool,
-                       transferQueue, false, {}, {}, 1, vk::ImageViewType::e2D, pCustomSamplerInfo);
+  return createTexture(vulkanDevice, pixels.data(), imageSize, extent, format, transferQueue, false,
+                       {}, {}, 1, vk::ImageViewType::e2D, pCustomSamplerInfo);
 }
