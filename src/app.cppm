@@ -32,9 +32,10 @@ import :ModelLoader;
 import :SceneBuilder;
 import :imgui;
 import :TextRenderer;
+import :UIRenderer;
 
-namespace {                        // Anonymous namespace for internal linkage
-constexpr u32 MIN_IMAGE_COUNT = 2; // Renamed from minImageCount to avoid conflict
+namespace { // Anonymous namespace for internal linkage
+constexpr u32 MIN_IMAGE_COUNT = 2;
 
 std::vector<Vertex> createQuadVertices(const glm::vec3 &center, float width, float height,
                                        const glm::vec3 &normal) {
@@ -90,12 +91,11 @@ export class App {
 
   Window wd; // VulkanWindow related data
   bool swapChainRebuild = false;
-  // int frameCap = 120;
-  // float targetFrameDuration = 1.0f / static_cast<float>(frameCap);
 
   // Rendering Resources
-  std::vector<VulkanPipeline> graphicsPipelines; // You might have multiple pipelines
-  VulkanPipeline textPipeline;                   // You might have multiple pipelines
+  std::vector<VulkanPipeline> graphicsPipelines;
+  VulkanPipeline textPipeline;
+  VulkanPipeline uiPipeline;
   vk::raii::PipelineCache pipelineCache{nullptr};
   vk::raii::DescriptorSetLayout combinedMeshLayout{nullptr}; // Single layout for meshes
 
@@ -115,8 +115,9 @@ export class App {
 
   Camera camera;
 
-  FontAtlasData mainFont;
+  std::vector<Font *> availableFonts;
   std::unique_ptr<TextRenderer> textRenderer;
+  std::unique_ptr<UIRenderer> uiRenderer;
 
   BS::thread_pool<> thread_pool;
   std::vector<LoadedGltfScene> loadedGltfData;
@@ -289,7 +290,8 @@ public:
         wd.RenderPass, &colorBlendAttachment, &depthStencilState));
   }
 
-  void createTextPipeline(u32 imageCount) {
+  void createTextPipeline(vk::raii::DescriptorSetLayout &textSetLayout,
+                          vk::raii::DescriptorSetLayout &uiSetLayout) {
     auto textVertShader = createShaderModuleFromFile(device.logical(), "shaders/text_vert.spv");
     auto textFragShader = createShaderModuleFromFile(device.logical(), "shaders/text_frag.spv");
     if (!textVertShader || !textFragShader) {
@@ -306,7 +308,14 @@ public:
          .stageFlags = vk::ShaderStageFlagBits::eFragment}};
     vk::DescriptorSetLayoutCreateInfo textLayoutInfo{.bindingCount = (u32)textBindings.size(),
                                                      .pBindings = textBindings.data()};
-    auto textSetLayout = device.logical().createDescriptorSetLayout(textLayoutInfo).value();
+    textSetLayout = device.logical().createDescriptorSetLayout(textLayoutInfo).value();
+
+    auto uiVertShader = createShaderModuleFromFile(device.logical(), "shaders/ui_vert.spv");
+    auto uiFragShader = createShaderModuleFromFile(device.logical(), "shaders/ui_frag.spv");
+    if (!uiVertShader || !uiFragShader) {
+      std::println("Error loading ui shaders.");
+      return;
+    }
 
     std::vector<vk::DescriptorSetLayoutBinding> instanceBindings = {
         {.binding = 0,
@@ -321,7 +330,7 @@ public:
     auto instanceSetLayout = device.logical().createDescriptorSetLayout(instanceLayoutInfo).value();
     // The text pipeline layout will also use a push constant to send per-quad data like color.
     vk::PushConstantRange pushConstantRange{
-        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        .stageFlags = vk::ShaderStageFlagBits::eVertex,
         .offset = 0,
         .size = sizeof(TextPushConstants) // We will push a color vector
     };
@@ -329,6 +338,10 @@ public:
     std::vector<vk::DescriptorSetLayout> textLayouts = {*textSetLayout, *instanceSetLayout};
     std::vector<vk::PushConstantRange> constantRanges = {pushConstantRange};
     EXPECTED_VOID(textPipeline.createPipelineLayout(device.logical(), textLayouts, constantRanges));
+
+    std::vector<vk::DescriptorSetLayout> uiLayouts = {*instanceSetLayout};
+    std::vector<vk::PushConstantRange> uiPCRanges = {pushConstantRange};
+    EXPECTED_VOID(uiPipeline.createPipelineLayout(device.logical(), uiLayouts, uiPCRanges));
 
     std::vector<vk::PipelineShaderStageCreateInfo> textShaderStages = {
         {.stage = vk::ShaderStageFlagBits::eVertex,
@@ -338,6 +351,14 @@ public:
          .module = *textFragShader.value(),
          .pName = "main"}};
 
+    std::vector<vk::PipelineShaderStageCreateInfo> uiShaderStages = {
+        {/*vertex*/ vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eVertex,
+                                                      .module = *uiVertShader.value(),
+                                                      .pName = "main"}},
+        {/*fragment*/ vk::PipelineShaderStageCreateInfo{.stage = vk::ShaderStageFlagBits::eFragment,
+                                                        .module = *uiFragShader.value(),
+                                                        .pName = "main"}}};
+
     // Vertex input for our simple text quad (pos and uv)
     vk::VertexInputBindingDescription textBindingDesc{0, sizeof(TextQuadVertex),
                                                       vk::VertexInputRate::eVertex};
@@ -345,18 +366,17 @@ public:
         {0, 0, vk::Format::eR32G32Sfloat, 0},                            // Position (vec2)
         {1, 0, vk::Format::eR32G32Sfloat, offsetof(TextQuadVertex, uv)}, // UV (vec2)
     }};
-    vk::PipelineVertexInputStateCreateInfo textVertexInputInfo{
+    vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
         .vertexBindingDescriptionCount = 1,
         .pVertexBindingDescriptions = &textBindingDesc,
         .vertexAttributeDescriptionCount = 2,
         .pVertexAttributeDescriptions = textAttrDesc.data()};
 
     // Standard triangle list input assembly
-    vk::PipelineInputAssemblyStateCreateInfo textInputAssembly{
+    vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
         .topology = vk::PrimitiveTopology::eTriangleList};
 
-    // --- Key difference: Color Blending for text ---
-    vk::PipelineColorBlendAttachmentState textBlendAttachment{
+    vk::PipelineColorBlendAttachmentState blendAttachment{
         .blendEnable = true,
         .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
         .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
@@ -367,28 +387,20 @@ public:
         .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
 
-    // --- Key difference: NO Depth Testing for UI/text ---
-    vk::PipelineDepthStencilStateCreateInfo textDepthStencilState{
+    vk::PipelineDepthStencilStateCreateInfo depthStencil{
         .depthTestEnable = false,
         .depthWriteEnable = false, // Don't write to depth buffer
     };
 
-    // Call your createGraphicsPipeline function, but pass in the modified states
     EXPECTED_VOID(textPipeline.createGraphicsPipeline(
-        device.logical(), pipelineCache, textShaderStages, textVertexInputInfo, textInputAssembly,
-        wd.RenderPass,
-        &textBlendAttachment,  // Pass pointer to custom blend state
-        &textDepthStencilState // Pass pointer to custom depth state
-        ));
+        device.logical(), pipelineCache, textShaderStages, vertexInputInfo, inputAssembly,
+        wd.RenderPass, &blendAttachment, &depthStencil));
 
-    if (imageCount == 0) {
-      std::println("kys");
-    }
-    textRenderer = std::make_unique<TextRenderer>(device, mainFont, imageCount, textSetLayout,
-                                                  device.descriptorPool_, device.queue_);
+    EXPECTED_VOID(uiPipeline.createGraphicsPipeline(device.logical(), pipelineCache, uiShaderStages,
+                                                    vertexInputInfo, inputAssembly, wd.RenderPass,
+                                                    &blendAttachment, &depthStencil));
   }
 
-  // NEW: Function to set up the shader toggles UBO
   [[nodiscard]] std::expected<void, std::string> SetupShaderToggles() {
     vk::DeviceSize bufferSize = sizeof(ShaderTogglesUBO);
     shaderTogglesUbos.resize(wd.Frames.size());
@@ -443,31 +455,31 @@ public:
   }
 
   void createDebugFontAtlasQuad(u32 currentImageCount) {
-    if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
-      std::println("Error: Main pipeline not initialized for debug quad.");
-      return;
-    }
-
-    // Create quad geometry
-    glm::vec3 center(0.0f, 0.0f, -5.0f); // Position in front of camera
-    float width = mainFont.atlasWidth;
-    float height = mainFont.atlasHeight;
-    glm::vec3 normal(0.0f, 0.0f, 1.0f);
-
-    Material quadMaterial;
-    PBRTextures quadTextures = textureStore.getAllDefaultTextures();
-    quadTextures.baseColor = textRenderer->getFontTexture();
-
-    auto quadMesh = std::make_unique<Mesh>(
-        device, "DebugFontAtlasQuad", createQuadVertices(center, width / 32, height / 32, normal),
-        createQuadIndices(), quadMaterial, quadTextures, currentImageCount);
-
-    appOwnedMeshes.emplace_back(std::move(quadMesh));
-
-    scene.createNode({.mesh = appOwnedMeshes.back().get(),
-                      .pipeline = &graphicsPipelines[0], // Use main textured pipeline
-                      .name = "DebugFontAtlasQuad_Node"},
-                     device.descriptorPool_, combinedMeshLayout);
+    // if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
+    //   std::println("Error: Main pipeline not initialized for debug quad.");
+    //   return;
+    // }
+    //
+    // // Create quad geometry
+    // glm::vec3 center(0.0f, 0.0f, -5.0f); // Position in front of camera
+    // float width = mainFont.atlasWidth;
+    // float height = mainFont.atlasHeight;
+    // glm::vec3 normal(0.0f, 0.0f, 1.0f);
+    //
+    // Material quadMaterial;
+    // PBRTextures quadTextures = textureStore.getAllDefaultTextures();
+    // // quadTextures.baseColor = textRenderer->getFontTexture();
+    //
+    // auto quadMesh = std::make_unique<Mesh>(
+    //     device, "DebugFontAtlasQuad", createQuadVertices(center, width / 32, height / 32,
+    //     normal), createQuadIndices(), quadMaterial, quadTextures, currentImageCount);
+    //
+    // appOwnedMeshes.emplace_back(std::move(quadMesh));
+    //
+    // scene.createNode({.mesh = appOwnedMeshes.back().get(),
+    //                   .pipeline = &graphicsPipelines[0], // Use main textured pipeline
+    //                   .name = "DebugFontAtlasQuad_Node"},
+    //                  device.descriptorPool_, combinedMeshLayout);
   }
 
   void createDebugAxesScene(u32 currentImageCount) {
@@ -564,14 +576,6 @@ public:
       pipelineCache = std::move(cacheResult.value());
     }
     EXPECTED_VOID(textureStore.createDefaultTextures());
-
-    auto fontResult =
-        createFontAtlas("../assets/fonts/Inconsolata/InconsolataNerdFontMono-Regular.ttf", 48);
-    if (!fontResult) {
-      std::println("{}", fontResult.error());
-      std::exit(1);
-    }
-    mainFont = std::move(fontResult.value());
   }
 
   void SetupVulkanWindow(SDL_Window *sdl_window, vk::Extent2D extent) {
@@ -720,22 +724,23 @@ public:
 
     Sheet sheet1{};
 
-    textRenderer->queueText("Hello, Vulkan!", 100.f, 200.f, {1.f, 1.f, 1.f, 1.f});
-    textRenderer->queueText("Vulkan?", 200.f, 100.f, {0.f, 0.f, 1.f, 1.f});
+    uiRenderer->queueSheet(
+        {
+            .position = {100, 100},
+            .size = {200, 200},
+            .backgroundColor = {1.f, 0.f, 0.f, 0.8f},
+        },
+        1.0f);
+
+    uiRenderer->draw(currentFrame.CommandBuffer, uiPipeline, wd.config.swapchainExtent,
+                     wd.FrameIndex);
+
+    textRenderer->queueText(availableFonts[0], "Hello, Vulkan!", 100.f, 200.f,
+                            {1.f, 1.f, 1.f, 1.f});
+    textRenderer->queueText(availableFonts[0], "Vulkan!?", 200.f, 100.f, {0.f, 0.f, 1.f, 1.f});
 
     textRenderer->draw(currentFrame.CommandBuffer, textPipeline, wd.config.swapchainExtent,
                        wd.FrameIndex);
-    // textRenderer->addCharacters("ABCDEFabcdef1234!@#$%",
-    //                             200.0f, // x position
-    //                             100.0f  // y position
-    // );
-    // textRenderer->addCharacters("56789",
-    //                             200.0f, // x position
-    //                             200.0f  // y position
-    // );
-    // textRenderer->renderText(currentFrame.CommandBuffer, textPipeline,
-    //                          glm::vec4(1.f, 1.f, 1.f, 1.0f), // color (white)
-    //                          wd.config.swapchainExtent, wd.FrameIndex);
 
     ImGui_ImplVulkan_RenderDrawData(draw_data, *currentFrame.CommandBuffer);
 
@@ -930,7 +935,27 @@ public:
         device.createDescriptorPool(static_cast<u32>(wd.Frames.size()) * numMeshesEstimate));
 
     createGraphicsPipelines();
-    createTextPipeline(wd.Frames.size());
+    vk::raii::DescriptorSetLayout textSetLayout{nullptr};
+    vk::raii::DescriptorSetLayout uiSetLayout{nullptr};
+    createTextPipeline(textSetLayout, uiSetLayout);
+    textRenderer = std::make_unique<TextRenderer>(device, wd.Frames.size(), device.descriptorPool_);
+    auto res = textRenderer->registerFont(
+        "../assets/fonts/Inconsolata/InconsolataNerdFontMono-Regular.ttf", 48, textSetLayout,
+        device.descriptorPool_, device.queue_);
+    if (!res) {
+      std::println("failed to create 1 font");
+    }
+    availableFonts.emplace_back(*res);
+
+    auto res2 =
+        textRenderer->registerFont("../assets/fonts/Inconsolata/InconsolataNerdFontMono-Bold.ttf",
+                                   48, textSetLayout, device.descriptorPool_, device.queue_);
+    if (!res2) {
+      std::println("failed to create 1 font");
+    }
+    availableFonts.emplace_back(*res2);
+
+    uiRenderer = std::make_unique<UIRenderer>(device, wd.Frames.size(), device.descriptorPool_);
 
     EXPECTED_VOID(SetupSceneLights());
     EXPECTED_VOID(SetupShaderToggles()); // NEW: Setup toggles UBO

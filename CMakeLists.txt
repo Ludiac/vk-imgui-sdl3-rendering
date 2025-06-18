@@ -101,23 +101,27 @@ target_sources(AppModule
         src/tinygltf_module_wrapper.cppm
         src/SDL_Wrapper.cppm
         src/app.cppm
+        src/imgui.cppm
+        src/memory_types.cppm
         src/utils.cppm
+        
         src/VulkanWindow.cppm
         src/VulkanDevice.cppm
         src/VulkanInstance.cppm
         src/VulkanPipeline.cppm
+        
+        src/ui.cppm
+        src/text.cppm
         src/UIRenderer.cppm
+        src/TextRenderer.cppm
+
         src/ModelLoader.cppm
         src/types.cppm
-        src/memory_types.cppm
         src/mesh.cppm
         src/scene.cppm
         src/SceneBuilder.cppm
         src/texture.cppm
         src/TextureStore.cppm
-        src/text.cppm
-        src/TextRenderer.cppm
-        src/imgui.cppm
 )
 
 target_sources(AppModule
@@ -200,3 +204,9 @@ compile_shader(CompileTextVertShader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/text_ve
 
 # Compile text_frag.slang as fragment shader to text_frag.spv
 compile_shader(CompileTextFragShader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/text_frag.slang fragment text_frag)
+
+# Compile ui_vert.slang as vertex shader to ui_vert.spv
+compile_shader(CompileuiVertShader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui_vert.slang vertex ui_vert)
+
+# Compile ui_frag.slang as fragment shader to ui_frag.spv
+compile_shader(CompileuiFragShader ${CMAKE_CURRENT_SOURCE_DIR}/shaders/ui_frag.slang fragment ui_frag)

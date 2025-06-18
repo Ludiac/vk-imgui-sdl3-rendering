@@ -1,0 +1,157 @@
+module;
+
+#include "macros.hpp"
+#include "primitive_types.hpp"
+#include <glm/glm.hpp>
+
+export module vulkan_app:ui;
+
+import vulkan_hpp;
+import std;
+
+import :VulkanDevice;
+import :VulkanPipeline;
+import :VMA;
+import :texture;
+import :text; // For FontAtlasData
+
+export struct Font {
+  friend class TextRenderer; // Allow renderer to access private members
+private:
+  FontAtlasData atlasData;
+  std::shared_ptr<Texture> texture;
+  vk::raii::DescriptorSet textureDescriptorSet{nullptr};
+
+public:
+  const FontAtlasData &getAtlasData() const { return atlasData; }
+};
+
+// The vertex layout for the single static quad.
+export struct TextQuadVertex {
+  glm::vec2 pos;
+  glm::vec2 uv;
+};
+
+// This struct defines the unique data for each character instance.
+// It will be sent to the shader via a storage buffer.
+export struct TextInstanceData {
+  glm::vec2 screenPos; // Top-left position of the quad
+  glm::vec2 scale;     // width and height of the quad
+  glm::vec2 uvTopLeft;
+  glm::vec2 uvBottomRight;
+  glm::vec4 color; // NEW: Color is now per-instance
+};
+
+export struct TextPushConstants {
+  glm::mat4 projection;
+};
+
+export struct Sheet {
+  glm::vec2 position{0.0f};                          // Top-left corner in screen pixels
+  glm::vec2 size{100.0f, 100.0f};                    // Width and height in pixels
+  glm::vec4 backgroundColor{0.1f, 0.1f, 0.1f, 0.8f}; // RGBA for the sheet's background
+
+  // Margins (padding) from the edges of the sheet
+  float marginTop = 5.0f;
+  float marginRight = 5.0f;
+  float marginBottom = 5.0f;
+  float marginLeft = 5.0f;
+};
+
+// Represents a block of text to be rendered within a Sheet.
+export struct TextBlock {
+  std::string text;
+  glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f}; // Default to white text
+  float fontSize = 48.0f;                  // This is illustrative; actual size is from FontAtlas
+  // Future properties could include alignment (left, center, right)
+};
+
+export [[nodiscard]] std::expected<void, std::string>
+createStaticQuadBuffers(VulkanDevice &device, VmaBuffer &vertexBuffer, VmaBuffer &indexBuffer) {
+  const std::vector<TextQuadVertex> vertices = {
+      {{0.0f, 1.0f}, {0.0f, 1.0f}}, // Bottom-left
+      {{1.0f, 1.0f}, {1.0f, 1.0f}}, // Bottom-right
+      {{1.0f, 0.0f}, {1.0f, 0.0f}}, // Top-right
+      {{0.0f, 0.0f}, {0.0f, 0.0f}}  // Top-left
+  };
+  const std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
+
+  auto createStagingBuffer = [&](vk::DeviceSize size,
+                                 const void *data) -> std::expected<VmaBuffer, std::string> {
+    vk::BufferCreateInfo bufInfo{.size = size, .usage = vk::BufferUsageFlagBits::eTransferSrc};
+    vma::AllocationCreateInfo allocInfo{.flags = vma::AllocationCreateFlagBits::eMapped,
+                                        .usage = vma::MemoryUsage::eCpuOnly};
+    auto res = device.createBufferVMA(bufInfo, allocInfo);
+    if (!res)
+      return std::unexpected("Failed to create staging buffer");
+    VmaBuffer buf = std::move(*res);
+    std::memcpy(buf.getMappedData(), data, static_cast<size_t>(size));
+    return std::expected<VmaBuffer, std::string>(std::move(buf));
+  };
+
+  auto createDeviceBuffer =
+      [&](vk::DeviceSize size,
+          vk::BufferUsageFlags usage) -> std::expected<VmaBuffer, std::string> {
+    vk::BufferCreateInfo bufInfo{.size = size,
+                                 .usage = usage | vk::BufferUsageFlagBits::eTransferDst};
+    vma::AllocationCreateInfo allocInfo{.usage = vma::MemoryUsage::eGpuOnly};
+    auto res = device.createBufferVMA(bufInfo, allocInfo);
+    if (!res)
+      return std::unexpected("Failed to create device-local buffer");
+    return std::expected<VmaBuffer, std::string>(std::move(*res));
+  };
+
+  // Vertex buffer
+  const vk::DeviceSize vertexSize = sizeof(TextQuadVertex) * vertices.size();
+  auto stagingVb = createStagingBuffer(vertexSize, vertices.data());
+  if (!stagingVb)
+    return std::unexpected("Failed to create text staging VB");
+
+  auto vertexBuf = createDeviceBuffer(vertexSize, vk::BufferUsageFlagBits::eVertexBuffer);
+  if (!vertexBuf)
+    return std::unexpected("Failed to create text static VB");
+
+  EXPECTED_VOID(device.copyBuffer(stagingVb->get(), vertexBuf->get(), vertexSize));
+  vertexBuffer = std::move(*vertexBuf);
+
+  // Index buffer
+  const vk::DeviceSize indexSize = sizeof(uint32_t) * indices.size();
+  auto stagingIb = createStagingBuffer(indexSize, indices.data());
+  if (!stagingIb)
+    return std::unexpected("Failed to create text staging IB");
+
+  auto indexBuf = createDeviceBuffer(indexSize, vk::BufferUsageFlagBits::eIndexBuffer);
+  if (!indexBuf)
+    return std::unexpected("Failed to create text static IB");
+
+  EXPECTED_VOID(device.copyBuffer(stagingIb->get(), indexBuf->get(), indexSize));
+  indexBuffer = std::move(*indexBuf);
+
+  return {};
+}
+
+export [[nodiscard]] std::expected<void, std::string>
+createInstanceBuffers(VulkanDevice &device, u32 frameCount, u32 size,
+                      std::vector<VmaBuffer> &buffers) {
+  buffers.resize(frameCount);
+  vk::DeviceSize bufferSize = size * sizeof(TextInstanceData);
+
+  for (u32 i = 0; i < frameCount; ++i) {
+    vk::BufferCreateInfo bufferInfo{
+        .size = bufferSize,
+        .usage = vk::BufferUsageFlagBits::eStorageBuffer // It's a storage buffer now
+    };
+    // These buffers need to be updated from the CPU every frame.
+    vma::AllocationCreateInfo allocInfo{
+        .flags = vma::AllocationCreateFlagBits::eHostAccessSequentialWrite |
+                 vma::AllocationCreateFlagBits::eMapped,
+        .usage = vma::MemoryUsage::eAuto};
+
+    auto bufferResult = device.createBufferVMA(bufferInfo, allocInfo);
+    if (!bufferResult) {
+      return std::unexpected("Failed to create text instance buffer " + std::to_string(i));
+    }
+    buffers[i] = std::move(*bufferResult);
+  }
+  return {};
+}
