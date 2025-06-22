@@ -3,9 +3,8 @@ module;
 #include "macros.hpp"
 #include "primitive_types.hpp"
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
-export module vulkan_app:TextRenderer;
+export module vulkan_app:TextSystem;
 
 import vulkan_hpp;
 import std;
@@ -14,52 +13,54 @@ import :VulkanDevice;
 import :VulkanPipeline;
 import :VMA;
 import :texture;
-import :text; // For FontAtlasData
+import :text;
 import :ui;
 
-export class TextRenderer {
+// This class is responsible for laying out text and preparing it for rendering.
+// It no longer issues draw calls itself.
+export class TextSystem {
 private:
   VulkanDevice &device;
-  u32 frameCount; // Number of frames in flight
-
+  u32 frameCount;
+  u32 maxQuadsPerFrame;
+  size_t minStorageBufferOffsetAlignment;
   std::vector<std::unique_ptr<Font>> registeredFonts;
-
   std::vector<VmaBuffer> instanceBuffers;
-  // Batching data, cleared each frame
   using InstanceVector = std::vector<TextInstanceData>;
   std::map<Font *, InstanceVector> frameBatch;
-
   VmaBuffer staticVertexBuffer;
-  VmaBuffer staticIndexBuffer; // NEW: Added an index buffer for the quad
+  VmaBuffer staticIndexBuffer;
   std::vector<vk::raii::DescriptorSet> instanceDataDescriptorSets;
-  vk::raii::DescriptorSetLayout instanceDataLayout{nullptr}; // Layout for the instance SSBO
-
-  u32 maxQuadsPerFrame;
+  vk::raii::DescriptorSetLayout instanceDataLayout{nullptr};
 
 public:
-  TextRenderer(VulkanDevice &dev, u32 inFlightFrameCount, const vk::raii::DescriptorPool &pool)
-      : device(dev), frameCount(inFlightFrameCount),
-        maxQuadsPerFrame(2048) // Max 2048 chars per draw call
-  {
-    EXPECTED_VOID(createInstanceBuffers(device, frameCount, maxQuadsPerFrame, instanceBuffers));
+  TextSystem(VulkanDevice &dev, u32 inFlightFrameCount, const vk::raii::DescriptorPool &pool)
+      : device(dev), frameCount(inFlightFrameCount), maxQuadsPerFrame(2048) {
+    // Implementations for these helpers are unchanged from your original TextRenderer.cpp
+    EXPECTED_VOID(createInstanceBuffers(device, frameCount, maxQuadsPerFrame, instanceBuffers,
+                                        sizeof(TextInstanceData)));
     EXPECTED_VOID(createInstanceDataDescriptorSetLayout());
     EXPECTED_VOID(allocateDescriptorSets(pool));
     EXPECTED_VOID(createStaticQuadBuffers(device, staticVertexBuffer, staticIndexBuffer));
   }
 
+  void beginFrame() {
+    // for (decltype(auto) i : frameBatch)
+    //   i.second.clear();
+    frameBatch.clear();
+  }
+
+  // The public API for registering fonts and queueing text remains unchanged.
   [[nodiscard]] std::expected<Font *, std::string>
   registerFont(const std::string &fontPath, int pixelHeight,
                const vk::raii::DescriptorSetLayout &textureLayout,
                const vk::raii::DescriptorPool &pool, const vk::raii::Queue &transferQueue) {
+    // Unchanged from original TextRenderer.cpp
     auto font = std::make_unique<Font>();
-
-    // 1. Create Font Atlas from TTF
     auto atlasResult = createFontAtlas(fontPath, pixelHeight);
     if (!atlasResult)
       return std::unexpected("Failed to create font atlas: " + atlasResult.error());
     font->atlasData = std::move(*atlasResult);
-
-    // 2. Create GPU Texture from Atlas
     auto texResult = createTexture(
         device, font->atlasData.atlasBitmap.data(), font->atlasData.atlasBitmap.size(),
         vk::Extent3D{(u32)font->atlasData.atlasWidth, (u32)font->atlasData.atlasHeight, 1},
@@ -67,15 +68,12 @@ public:
     if (!texResult)
       return std::unexpected("Failed to create font texture: " + texResult.error());
     font->texture = std::make_shared<Texture>(std::move(*texResult));
-
-    // 3. Create and update descriptor set for this font's texture
     vk::DescriptorSetAllocateInfo allocInfo{
         .descriptorPool = pool, .descriptorSetCount = 1, .pSetLayouts = &*textureLayout};
     auto setResult = device.logical().allocateDescriptorSets(allocInfo);
     if (!setResult)
       return std::unexpected("Failed to allocate font descriptor set.");
     font->textureDescriptorSet = std::move(setResult.value().front());
-
     vk::DescriptorImageInfo imageInfo{.sampler = *font->texture->sampler,
                                       .imageView = *font->texture->view,
                                       .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};
@@ -85,111 +83,98 @@ public:
                                  .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                  .pImageInfo = &imageInfo};
     device.logical().updateDescriptorSets({write}, nullptr);
-
-    // Store font and return raw pointer as a handle
     registeredFonts.push_back(std::move(font));
     return registeredFonts.back().get();
   }
 
   void queueText(Font *font, const std::string &text, float x, float y, const glm::vec4 &color) {
+    // Unchanged from original TextRenderer.cpp
     if (!font || text.empty())
       return;
-
     const auto &glyphs = font->getAtlasData().glyphs;
-    auto &instanceVec = frameBatch[font]; // Creates entry if not present
-
+    auto &instanceVec = frameBatch[font];
     float cursorX = x;
     float baselineY = y;
-
     for (char c : text) {
       if (instanceVec.size() + frameBatch.size() > maxQuadsPerFrame)
         break;
-
       const GlyphInfo &gi = glyphs.count(c) ? glyphs.at(c) : glyphs.at('?');
-
       if (gi.width > 0 && gi.height > 0) {
         float xpos = cursorX + gi.bearing_x;
-        float ypos = baselineY + gi.bearing_y - gi.height;
-
-        // Add the color directly to the instance data
+        float ypos = baselineY - gi.bearing_y;
         instanceVec.emplace_back(TextInstanceData{.screenPos = {xpos, ypos},
                                                   .scale = {gi.width, gi.height},
-                                                  .uvTopLeft = {gi.uv_x0, gi.uv_y1},
-                                                  .uvBottomRight = {gi.uv_x1, gi.uv_y0},
+                                                  .uvTopLeft = {gi.uv_x0, gi.uv_y0},
+                                                  .uvBottomRight = {gi.uv_x1, gi.uv_y1},
                                                   .color = color});
       }
       cursorX += gi.advance;
     }
   }
 
-  void draw(const vk::raii::CommandBuffer &cmd, const VulkanPipeline &pipeline,
-            vk::Extent2D windowSize, u32 frameIndex) {
+  // REPLACES the old `draw` method.
+  void prepareBatches(RenderQueue &queue, const VulkanPipeline &textPipeline, u32 frameIndex) {
     if (frameBatch.empty())
       return;
 
-    // 1. Bind pipeline and static buffers once.
-    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline.pipeline);
-    cmd.bindVertexBuffers(0, {staticVertexBuffer.get()}, {0});
-    cmd.bindIndexBuffer(staticIndexBuffer.get(), 0, vk::IndexType::eUint32);
-
-    // 2. Bind the common instance data descriptor set once.
-    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipeline.pipelineLayout, 1,
-                           {*instanceDataDescriptorSets[frameIndex]}, {});
-
-    // 3. Push projection matrix once.
-    glm::mat4 ortho = glm::ortho(0.0f, static_cast<float>(windowSize.width),
-                                 static_cast<float>(windowSize.height), 0.0f);
-    TextPushConstants constants{.projection = ortho};
-    cmd.pushConstants<TextPushConstants>(*pipeline.pipelineLayout, vk::ShaderStageFlagBits::eVertex,
-                                         0, constants);
-
     u32 currentFirstInstance = 0;
+    uint32_t currentByteOffset = 0; // <--- Track byte offset
     VmaBuffer &currentInstanceBuffer = instanceBuffers[frameIndex];
 
-    // 4. Iterate through each font batch.
     for (auto const &[font, instances] : frameBatch) {
       if (instances.empty())
         continue;
 
-      // 4a. Update the SSBO with data for the *current batch*.
-      // We copy into the single large buffer at an offset.
+      // 1. Copy instance data for this font batch to the GPU SSBO at the correct offset
       size_t dataSize = instances.size() * sizeof(TextInstanceData);
-      size_t offset = currentFirstInstance * sizeof(TextInstanceData);
-      if (offset + dataSize > currentInstanceBuffer.getAllocationInfo().size) {
-        std::println("Text instance data exceeds buffer capacity. Some text will not be rendered.");
-        break; // Stop rendering if we run out of space
+      if (currentByteOffset + dataSize > currentInstanceBuffer.getAllocationInfo().size) {
+        // Consider logging this warning instead of printing to stdout
+        break;
       }
-      std::memcpy(static_cast<char *>(currentInstanceBuffer.getMappedData()) + offset,
+      std::memcpy(static_cast<char *>(currentInstanceBuffer.getMappedData()) + currentByteOffset,
                   instances.data(), dataSize);
 
-      // 4b. Bind the unique descriptor set for this font's texture.
-      cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *pipeline.pipelineLayout, 0,
-                             {*font->textureDescriptorSet}, {});
-
-      // 4c. Issue a draw call for this font's batch.
-      cmd.drawIndexed(6, static_cast<u32>(instances.size()), 0, 0, currentFirstInstance);
+      // 2. Create a batch for THIS FONT and add it to the queue
+      queue.emplace_back(RenderBatch{
+          .sortKey = 200, // Text on top of UI
+          .pipeline = &textPipeline.pipeline,
+          .pipelineLayout = &textPipeline.pipelineLayout,
+          .instanceDataSet = &instanceDataDescriptorSets[frameIndex], // Points to the big SSBO
+          .textureSet = &font->textureDescriptorSet, // The unique texture for this font!
+          .vertexBuffer = &staticVertexBuffer,
+          .indexBuffer = &staticIndexBuffer,
+          .indexCount = 6,
+          .instanceCount = static_cast<u32>(instances.size()),
+          .firstInstance = 0, // <--- IMPORTANT: This is now 0!
+          .dynamicOffset = currentByteOffset,
+      });
 
       currentFirstInstance += static_cast<u32>(instances.size());
+      size_t alignedSize = pad_uniform_buffer_size(dataSize, this->minStorageBufferOffsetAlignment);
+      currentByteOffset += static_cast<uint32_t>(alignedSize);
+
+      // Bounds check
+      if (currentByteOffset > currentInstanceBuffer.getAllocationInfo().size) {
+        // Log a warning/error, you've run out of buffer space
+        break;
+      }
     }
-    frameBatch.clear();
+    updateDescriptorSets(currentFirstInstance, frameIndex);
   }
 
-  // Texture* getFontTexture() { return registeredFonts[0]; }
-
 private:
+  // All private helper methods for buffer and descriptor set creation
+  // remain unchanged from your original TextRenderer.cpp. They should be copied over.
   [[nodiscard]] std::expected<void, std::string> createInstanceDataDescriptorSetLayout() {
     vk::DescriptorSetLayoutBinding instanceBinding{.binding = 0,
                                                    .descriptorType =
-                                                       vk::DescriptorType::eStorageBuffer,
+                                                       vk::DescriptorType::eStorageBufferDynamic,
                                                    .descriptorCount = 1,
                                                    .stageFlags = vk::ShaderStageFlagBits::eVertex};
-
     vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1, .pBindings = &instanceBinding};
-
     auto layoutResult = device.logical().createDescriptorSetLayout(layoutInfo);
-    if (!layoutResult) {
+    if (!layoutResult)
       return std::unexpected("Failed to create text instance data descriptor set layout.");
-    }
     instanceDataLayout = std::move(layoutResult.value());
     return {};
   }
@@ -199,25 +184,25 @@ private:
     std::vector<vk::DescriptorSetLayout> layouts(frameCount, *instanceDataLayout);
     vk::DescriptorSetAllocateInfo instanceAllocInfo{
         .descriptorPool = pool, .descriptorSetCount = frameCount, .pSetLayouts = layouts.data()};
-
     auto instanceSetResult = device.logical().allocateDescriptorSets(instanceAllocInfo);
-    if (!instanceSetResult) {
+    if (!instanceSetResult)
       return std::unexpected("Failed to allocate text instance descriptor sets.");
-    }
     instanceDataDescriptorSets = std::move(instanceSetResult.value());
-
-    // Update each instance descriptor set to point to its corresponding buffer
-    for (u32 i = 0; i < frameCount; ++i) {
-      vk::DescriptorBufferInfo bufferInfo{
-          .buffer = instanceBuffers[i].get(), .offset = 0, .range = vk::WholeSize};
-      vk::WriteDescriptorSet instanceWrite{.dstSet = *instanceDataDescriptorSets[i],
-                                           .dstBinding = 0,
-                                           .descriptorCount = 1,
-                                           .descriptorType = vk::DescriptorType::eStorageBuffer,
-                                           .pBufferInfo = &bufferInfo};
-      device.logical().updateDescriptorSets({instanceWrite}, nullptr);
-    }
-
     return {};
+  }
+
+  void updateDescriptorSets(u32 instanceNumber, u32 frameIndex) {
+    vk::DescriptorBufferInfo bufferInfo{
+        .buffer = instanceBuffers[frameIndex].get(),
+        .offset = 0,
+        .range = instanceNumber * sizeof(TextInstanceData),
+    };
+    vk::WriteDescriptorSet instanceWrite{.dstSet = instanceDataDescriptorSets[frameIndex],
+                                         .dstBinding = 0,
+                                         .descriptorCount = 1,
+                                         .descriptorType =
+                                             vk::DescriptorType::eStorageBufferDynamic,
+                                         .pBufferInfo = &bufferInfo};
+    device.logical().updateDescriptorSets({instanceWrite}, nullptr);
   }
 };

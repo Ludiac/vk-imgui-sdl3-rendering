@@ -71,7 +71,6 @@ export struct VulkanPipeline {
     };
 
     if (!pushConstantRanges.empty()) {
-      std::println("not empty");
       pipelineLayoutInfo.pushConstantRangeCount = static_cast<u32>(pushConstantRanges.size());
       pipelineLayoutInfo.pPushConstantRanges = pushConstantRanges.data();
     }
@@ -123,7 +122,7 @@ export struct VulkanPipeline {
         .depthClampEnable = false,        // Usually false
         .rasterizerDiscardEnable = false, // Usually false
         .polygonMode = vk::PolygonMode::eFill,
-        .cullMode = vk::CullModeFlagBits::eBack,
+        .cullMode = vk::CullModeFlagBits::eNone,
         .frontFace = vk::FrontFace::eClockwise,
 
         .depthBiasEnable = false,

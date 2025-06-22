@@ -26,6 +26,7 @@ private:
   vk::raii::CommandPool transientCommandPool_{nullptr};
 
 public:
+  vk::PhysicalDeviceLimits limits;
   u32 queueFamily_ = (u32)-1;
   vk::raii::Queue queue_{nullptr};
   vk::raii::DescriptorPool descriptorPool_{nullptr};
@@ -97,6 +98,7 @@ public:
         return std::unexpected("No Vulkan-compatible physical devices found!");
       }
       physicalDevice_ = std::move(expected->front());
+      limits = physicalDevice_.getProperties().limits;
       return {};
     } else {
       return std::unexpected("Failed to enumerate physical devices: " +
@@ -182,6 +184,7 @@ public:
         {vk::DescriptorType::eCombinedImageSampler,
          app_combined_image_samplers + IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE},
         {vk::DescriptorType::eStorageBuffer, 30},
+        {vk::DescriptorType::eStorageBufferDynamic, 10},
     };
 
     u32 application_max_sets = imageCountBasedFactor * 2;

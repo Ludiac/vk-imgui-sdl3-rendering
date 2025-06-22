@@ -9,7 +9,7 @@ struct FragmentOutput {
 };
 
 // The font atlas sampler
-[[vk::binding(0, 0)]]
+[[vk::binding(0, 1)]]
 Sampler2D fontAtlas;
 
 FragmentOutput main(FragmentInput input) {

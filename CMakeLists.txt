@@ -104,6 +104,7 @@ target_sources(AppModule
         src/imgui.cppm
         src/memory_types.cppm
         src/utils.cppm
+        src/extra.cppm
         
         src/VulkanWindow.cppm
         src/VulkanDevice.cppm
@@ -112,8 +113,10 @@ target_sources(AppModule
         
         src/ui.cppm
         src/text.cppm
-        src/UIRenderer.cppm
-        src/TextRenderer.cppm
+        src/UISystem.cppm
+        src/TextSystem.cppm
+        src/PieceTable.cppm
+        src/TextArea.cppm
 
         src/ModelLoader.cppm
         src/types.cppm

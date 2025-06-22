@@ -29,7 +29,7 @@ struct VertexOutput {
 // BINDINGS
 // Set 0, Binding 0: The font atlas texture (used in fragment shader)
 // Set 1, Binding 0: The storage buffer with our instance data
-[[vk::binding(0, 1)]]
+[[vk::binding(0, 0)]]
 StructuredBuffer<TextInstanceData> instanceBuffer;
 
 [[vk::push_constant]]

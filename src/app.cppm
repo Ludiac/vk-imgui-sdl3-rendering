@@ -31,30 +31,31 @@ import :TextureStore;
 import :ModelLoader;
 import :SceneBuilder;
 import :imgui;
-import :TextRenderer;
-import :UIRenderer;
+import :TextSystem;
+import :UISystem;
+import :ui;
 
 namespace { // Anonymous namespace for internal linkage
 constexpr u32 MIN_IMAGE_COUNT = 2;
 
-std::vector<Vertex> createQuadVertices(const glm::vec3 &center, float width, float height,
-                                       const glm::vec3 &normal) {
-  float halfW = width / 2.0f;
-  float halfH = height / 2.0f;
-  return {
-      // Bottom-left
-      {center + glm::vec3(-halfW, -halfH, 0.0f), normal, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-      // Bottom-right
-      {center + glm::vec3(halfW, -halfH, 0.0f), normal, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-      // Top-left
-      {center + glm::vec3(-halfW, halfH, 0.0f), normal, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-      // Top-right
-      {center + glm::vec3(halfW, halfH, 0.0f), normal, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}};
-}
-
-std::vector<u32> createQuadIndices() {
-  return {0, 1, 2, 1, 3, 2}; // Two triangles
-}
+// std::vector<Vertex> createQuadVertices(const glm::vec3 &center, float width, float height,
+//                                        const glm::vec3 &normal) {
+//   float halfW = width / 2.0f;
+//   float halfH = height / 2.0f;
+//   return {
+//       // Bottom-left
+//       {center + glm::vec3(-halfW, -halfH, 0.0f), normal, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+//       // Bottom-right
+//       {center + glm::vec3(halfW, -halfH, 0.0f), normal, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+//       // Top-left
+//       {center + glm::vec3(-halfW, halfH, 0.0f), normal, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+//       // Top-right
+//       {center + glm::vec3(halfW, halfH, 0.0f), normal, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}};
+// }
+//
+// std::vector<u32> createQuadIndices() {
+//   return {0, 1, 2, 1, 3, 2}; // Two triangles
+// }
 
 std::vector<Vertex> createAxisLineVertices(const glm::vec3 &start, const glm::vec3 &end,
                                            const glm::vec3 &normal_placeholder) {
@@ -116,8 +117,8 @@ export class App {
   Camera camera;
 
   std::vector<Font *> availableFonts;
-  std::unique_ptr<TextRenderer> textRenderer;
-  std::unique_ptr<UIRenderer> uiRenderer;
+  std::unique_ptr<TextSystem> textSystem;
+  std::unique_ptr<UISystem> uiSystem;
 
   BS::thread_pool<> thread_pool;
   std::vector<LoadedGltfScene> loadedGltfData;
@@ -319,7 +320,7 @@ public:
 
     std::vector<vk::DescriptorSetLayoutBinding> instanceBindings = {
         {.binding = 0,
-         .descriptorType = vk::DescriptorType::eStorageBuffer,
+         .descriptorType = vk::DescriptorType::eStorageBufferDynamic,
          .descriptorCount = 1,
          .stageFlags = vk::ShaderStageFlagBits::eVertex}};
 
@@ -332,10 +333,10 @@ public:
     vk::PushConstantRange pushConstantRange{
         .stageFlags = vk::ShaderStageFlagBits::eVertex,
         .offset = 0,
-        .size = sizeof(TextPushConstants) // We will push a color vector
+        .size = sizeof(OrthoPushConstants) // We will push a color vector
     };
 
-    std::vector<vk::DescriptorSetLayout> textLayouts = {*textSetLayout, *instanceSetLayout};
+    std::vector<vk::DescriptorSetLayout> textLayouts = {*instanceSetLayout, *textSetLayout};
     std::vector<vk::PushConstantRange> constantRanges = {pushConstantRange};
     EXPECTED_VOID(textPipeline.createPipelineLayout(device.logical(), textLayouts, constantRanges));
 
@@ -720,27 +721,37 @@ public:
                         static_cast<float>(wd.config.swapchainExtent.height), 0.0f, 1.0f});
     currentFrame.CommandBuffer.setScissor(0, vk::Rect2D{{0, 0}, wd.config.swapchainExtent});
 
-    scene.draw(currentFrame.CommandBuffer, wd.FrameIndex);
+    // scene.draw(currentFrame.CommandBuffer, wd.FrameIndex);
 
-    Sheet sheet1{};
+    textSystem->beginFrame();
+    uiSystem->beginFrame();
 
-    uiRenderer->queueSheet(
+    RenderQueue renderQueue;
+
+    textSystem->queueText(availableFonts[0], "Hello, Vulkan!", 100.f, 200.f, {1.f, 1.f, 1.f, 1.f});
+    textSystem->queueText(availableFonts[1], "Vulkan!?", 200.f, 100.f, {0.f, 0.f, 1.f, 1.f});
+    textSystem->queueText(availableFonts[1], "An apple", 600.f, 100.f, {0.f, 1.f, 1.f, 1.f});
+
+    uiSystem->queueSheet(
         {
-            .position = {100, 100},
-            .size = {200, 200},
-            .backgroundColor = {1.f, 0.f, 0.f, 0.8f},
+            .position = {200, 200},
+            .size = {300, 300},
+            .backgroundColor = {1.f, 1.f, 0.f, 1.0f},
         },
-        1.0f);
+        0.f);
 
-    uiRenderer->draw(currentFrame.CommandBuffer, uiPipeline, wd.config.swapchainExtent,
-                     wd.FrameIndex);
+    uiSystem->queueSheet(
+        {
+            .position = {1000, 100},
+            .size = {200, 200},
+            .backgroundColor = {1.f, 0.f, 0.f, 1.0f},
+        },
+        0.f);
 
-    textRenderer->queueText(availableFonts[0], "Hello, Vulkan!", 100.f, 200.f,
-                            {1.f, 1.f, 1.f, 1.f});
-    textRenderer->queueText(availableFonts[0], "Vulkan!?", 200.f, 100.f, {0.f, 0.f, 1.f, 1.f});
+    textSystem->prepareBatches(renderQueue, textPipeline, wd.FrameIndex);
+    uiSystem->prepareBatches(renderQueue, uiPipeline, wd.FrameIndex);
 
-    textRenderer->draw(currentFrame.CommandBuffer, textPipeline, wd.config.swapchainExtent,
-                       wd.FrameIndex);
+    processRenderQueue(currentFrame.CommandBuffer, wd.config.swapchainExtent, renderQueue);
 
     ImGui_ImplVulkan_RenderDrawData(draw_data, *currentFrame.CommandBuffer);
 
@@ -759,7 +770,6 @@ public:
   }
 
   void FramePresent() {
-
     if (swapChainRebuild || !*wd.Swapchain) {
       return;
     }
@@ -776,7 +786,6 @@ public:
         presentResult == vk::Result::eSuboptimalKHR) {
       swapChainRebuild = true;
     } else if (presentResult != vk::Result::eSuccess) {
-
       std::println("Error presenting swapchain image: {}", vk::to_string(presentResult));
     } else {
     }
@@ -938,24 +947,24 @@ public:
     vk::raii::DescriptorSetLayout textSetLayout{nullptr};
     vk::raii::DescriptorSetLayout uiSetLayout{nullptr};
     createTextPipeline(textSetLayout, uiSetLayout);
-    textRenderer = std::make_unique<TextRenderer>(device, wd.Frames.size(), device.descriptorPool_);
-    auto res = textRenderer->registerFont(
-        "../assets/fonts/Inconsolata/InconsolataNerdFontMono-Regular.ttf", 48, textSetLayout,
-        device.descriptorPool_, device.queue_);
+    textSystem = std::make_unique<TextSystem>(device, wd.Frames.size(), device.descriptorPool_);
+    auto res =
+        textSystem->registerFont("../assets/fonts/Inconsolata/InconsolataNerdFontMono-Regular.ttf",
+                                 48, textSetLayout, device.descriptorPool_, device.queue_);
     if (!res) {
       std::println("failed to create 1 font");
     }
     availableFonts.emplace_back(*res);
 
     auto res2 =
-        textRenderer->registerFont("../assets/fonts/Inconsolata/InconsolataNerdFontMono-Bold.ttf",
-                                   48, textSetLayout, device.descriptorPool_, device.queue_);
+        textSystem->registerFont("../assets/fonts/Inconsolata/InconsolataNerdFontMono-Bold.ttf", 48,
+                                 textSetLayout, device.descriptorPool_, device.queue_);
     if (!res2) {
       std::println("failed to create 1 font");
     }
     availableFonts.emplace_back(*res2);
 
-    uiRenderer = std::make_unique<UIRenderer>(device, wd.Frames.size(), device.descriptorPool_);
+    uiSystem = std::make_unique<UISystem>(device, wd.Frames.size(), device.descriptorPool_);
 
     EXPECTED_VOID(SetupSceneLights());
     EXPECTED_VOID(SetupShaderToggles()); // NEW: Setup toggles UBO
