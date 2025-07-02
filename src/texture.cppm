@@ -123,6 +123,7 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
 
   Texture textureOut;
   textureOut.arrayLayers = arrayLayers;
+  textureOut.extent = texExtent;
 
   if (generateMipmaps && texExtent.width > 0 && texExtent.height > 0) {
     textureOut.mipLevels =

@@ -3,28 +3,36 @@ module;
 #include "macros.hpp"
 #include "primitive_types.hpp"
 #include <ft2build.h>
+#include <msdf-atlas-gen.h> // Include for msdf_atlas namespace
+#include <msdfgen-ext.h>    // For Freetype integration
+#include <msdfgen.h>
 #include FT_FREETYPE_H
 
 export module vulkan_app:text;
 
+import :texture;
 import vulkan_hpp;
 import std;
+
+// A simple RAII/scope guard helper for automatic cleanup.
+namespace {
+template <typename F> struct ScopeGuard {
+  F f;
+  ScopeGuard(F &&f) : f(std::move(f)) {}
+  ~ScopeGuard() { f(); }
+};
+} // namespace
 
 // This structure holds all the information needed to render a single character.
 export struct GlyphInfo {
   // Texture coordinates for the glyph in the atlas
-  float uv_x0;
-  float uv_y0;
-  float uv_x1;
-  float uv_y1;
+  float uv_x0, uv_y0, uv_x1, uv_y1;
 
   // Size of the glyph quad in pixels
-  float width;
-  float height;
+  float width, height;
 
   // The offset from the text cursor's baseline to the glyph's top-left corner
-  float bearing_x;
-  float bearing_y;
+  float bearing_x, bearing_y;
 
   // The horizontal distance to advance the cursor to the next character
   float advance;
@@ -32,129 +40,186 @@ export struct GlyphInfo {
 
 // This struct holds the complete output of the font atlas generation.
 export struct FontAtlasData {
-  std::vector<unsigned char> atlasBitmap;
+  // The atlas is now multi-channel (4 channels for MTSDF)
+  std::vector<msdf_atlas::byte> atlasBitmap;
   int atlasWidth;
   int atlasHeight;
-  std::map<char, GlyphInfo> glyphs;
+  std::map<msdfgen::unicode_t, GlyphInfo> glyphs;
+  double pxRange;    // Store the pixel range for the shader
+  double atlasScale; // **NEW**: Store the scale used by the atlas packer
+
+  double unitsPerEm; // Font design units per EM
+  double ascender;   // Distance from baseline to highest point
+  double descender;  // Distance from baseline to lowest point
+  double lineHeight; // Recommended line spacing
+};
+
+export struct Font {
+  FontAtlasData atlasData;
+  std::shared_ptr<Texture> texture;
+  vk::raii::DescriptorSet textureDescriptorSet{nullptr};
 };
 
 /**
- * @brief Generates a font atlas for the specified font file and pixel height.
- * This function handles loading a TTF font file, calculating an optimal size for
- * a texture atlas, rendering the glyphs for a specified character set (ASCII 32-126)
- * into the atlas, and packaging all relevant data into a single struct.
+ * @brief Generates a Multi-channel True Signed Distance Field (MTSDF) font atlas.
+ * This function uses msdf-gen to create a high-quality, resolution-independent
+ * font atlas from a TTF file. The RGB channels store the MSDF, and the Alpha channel
+ * stores a true SDF.
  *
  * @param fontPath Path to the .ttf font file.
- * @param pixelHeight The desired height of the font in pixels.
- * @return A FontAtlasData struct containing the bitmap, dimensions, and glyph metrics.
+ * @param pixelHeight The desired height of the font in pixels for metric calculations.
+ * @return A FontAtlasData struct containing the MTSDF bitmap, dimensions, and glyph metrics.
  */
 export [[nodiscard]] std::expected<FontAtlasData, std::string>
-createFontAtlas(const std::string &fontPath, int pixelHeight) {
+createFontAtlasMSDF(const std::string &fontPath, int pixelHeight) {
   FontAtlasData atlasData;
 
-  FT_Library ft;
-  if (FT_Init_FreeType(&ft)) {
-    return std::unexpected("FREETYPE: Could not init FreeType Library");
+  msdfgen::FreetypeHandle *ftHandle = msdfgen::initializeFreetype();
+  if (!ftHandle) {
+    return std::unexpected("MSDFGEN: Failed to initialize Freetype handle");
+  }
+  ScopeGuard ftHandleGuard([&]() { msdfgen::deinitializeFreetype(ftHandle); });
+
+  msdfgen::FontHandle *font = msdfgen::loadFont(ftHandle, fontPath.c_str());
+  if (!font) {
+    return std::unexpected("MSDFGEN: Failed to load font handle");
+  }
+  ScopeGuard fontGuard([&]() { msdfgen::destroyFont(font); });
+
+  // --- Configuration ---
+  const double angleThreshold = 3.0;
+  const double miterLimit = 1.0;
+  atlasData.pxRange = 8.0; // The distance field range in atlas pixels.
+
+  const std::string fullCharset =
+      " !\"#$%&'()*+,-./"
+      "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+  std::string currentCharset = "Vulkan?";
+  if (currentCharset.empty()) {
+    currentCharset = fullCharset;
   }
 
-  FT_Face face;
-  if (FT_New_Face(ft, fontPath.c_str(), 0, &face)) {
-    FT_Done_FreeType(ft);
-    return std::unexpected("FREETYPE: Failed to load font: " + fontPath);
-  }
+  std::vector<msdf_atlas::GlyphGeometry> glyphs;
 
-  FT_Set_Pixel_Sizes(face, 0, pixelHeight);
-
-  // Disable byte-alignment restriction for pixel unpacking
-  // This is important for tightly packed glyphs in the atlas.
-  // glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-  int atlasWidth = 0;
-  int atlasHeight = 0;
-  int rowHeight = 0;
-  int penX = 0;
-
-  // --- Pass 1: Calculate required atlas dimensions ---
-  // A more robust approach than summing area is to simulate the packing.
-  for (unsigned char c = 32; c < 127; ++c) {
-    if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
-      std::println("Warning: Failed to load Glyph for character '{}'", c);
+  for (char c_char : currentCharset) {
+    msdfgen::unicode_t c = static_cast<msdfgen::unicode_t>(c_char);
+    msdf_atlas::GlyphGeometry glyphGeometry;
+    const double geometryScale = 1.0 / 8.0; // This is a typical value, adjust if needed
+    if (!glyphGeometry.load(font, geometryScale, c, true)) {
+      std::cerr << "Warning: Could not load glyph geometry for character '" << c_char << "'\n";
       continue;
     }
-    if (penX + face->glyph->bitmap.width + 1 >=
-        512) { // Use a fixed-width for simplicity (e.g. 512px)
-      atlasWidth = std::max(atlasWidth, penX);
-      penX = 0;
-      atlasHeight += rowHeight;
-      rowHeight = 0;
-    }
-    penX += face->glyph->bitmap.width + 1;
-    rowHeight = std::max(rowHeight, (int)face->glyph->bitmap.rows);
+    glyphs.emplace_back(glyphGeometry); // Use move to avoid copy if GlyphGeometry is large
   }
-  atlasWidth = std::max(atlasWidth, penX);
-  atlasHeight += rowHeight;
+  // alternative, but buggy
+  // msdf_atlas::FontGeometry fontGEometry;
+  // msdf_atlas::Charset charset;
+  // for (char c_char : currentCharset) {
+  //   charset.add(static_cast<msdfgen::unicode_t>(c_char));
+  // }
+  // double geometryScale = 1.0; // Use a scale of 1.0 for now, the packer will handle the final
+  // scale int num = fontGEometry.loadCharset(font, geometryScale, charset); auto frfr =
+  // fontGEometry.getGlyphs(); glyphs.assign(frfr.begin(), frfr.end());
+  std::println("DEBUG: Loaded {} glyphs from font.", glyphs.size());
 
-  atlasData.atlasWidth = atlasWidth;
-  atlasData.atlasHeight = atlasHeight;
-  atlasData.atlasBitmap.resize(atlasData.atlasWidth * atlasData.atlasHeight, 0);
-
-  // --- Pass 2: Pack glyphs and generate the atlas ---
-  penX = 0;
-  int penY = 0;
-  rowHeight = 0;
-
-  for (unsigned char c = 32; c < 127; ++c) {
-    if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
-      continue;
-    }
-
-    FT_GlyphSlot glyph = face->glyph;
-
-    if (penX + glyph->bitmap.width + 1 >= atlasData.atlasWidth) {
-      penY += rowHeight;
-      penX = 0;
-      rowHeight = 0;
-    }
-
-    // Copy glyph bitmap to our main atlas bitmap
-    for (unsigned int y = 0; y < glyph->bitmap.rows; ++y) {
-      for (unsigned int x = 0; x < glyph->bitmap.width; ++x) {
-        int atlasIndex = (penY + y) * atlasData.atlasWidth + (penX + x);
-        int glyphIndex = y * glyph->bitmap.pitch + x;
-        atlasData.atlasBitmap[atlasIndex] = glyph->bitmap.buffer[glyphIndex];
-      }
-    }
-
-    // Store glyph metrics. UVs are calculated based on the final, known atlas dimensions.
-    GlyphInfo info{
-        .uv_x0 = static_cast<float>(penX) / atlasData.atlasWidth,
-        .uv_y0 = static_cast<float>(penY) / atlasData.atlasHeight,
-        .uv_x1 = static_cast<float>(penX + glyph->bitmap.width) / atlasData.atlasWidth,
-        .uv_y1 = static_cast<float>(penY + glyph->bitmap.rows) / atlasData.atlasHeight,
-        .width = static_cast<float>(glyph->bitmap.width),
-        .height = static_cast<float>(glyph->bitmap.rows),
-        .bearing_x = static_cast<float>(glyph->metrics.horiBearingX >> 6),
-        .bearing_y = static_cast<float>(glyph->metrics.horiBearingY >> 6),
-        .advance = static_cast<float>(glyph->metrics.horiAdvance >> 6),
-    };
-
-    atlasData.glyphs[c] = info;
-
-    penX += glyph->bitmap.width + 1;
-    rowHeight = std::max(rowHeight, (int)glyph->bitmap.rows);
+  if (glyphs.empty()) {
+    return std::unexpected("MSDFGEN: No glyphs loaded from font. Check font file and charset.");
   }
 
-  // Create a fallback '?' glyph for any character not in the atlas
-  if (atlasData.glyphs.find('?') == atlasData.glyphs.end()) {
-    if (atlasData.glyphs.count('A')) {
-      atlasData.glyphs['?'] = atlasData.glyphs['A'];
-    } else if (!atlasData.glyphs.empty()) {
-      atlasData.glyphs['?'] = atlasData.glyphs.begin()->second;
-    }
+  // Apply edge coloring to all loaded glyphs
+  for (msdf_atlas::GlyphGeometry &glyph : glyphs) {
+    glyph.edgeColoring(msdfgen::edgeColoringSimple, angleThreshold, 0);
   }
 
-  FT_Done_Face(face);
-  FT_Done_FreeType(ft);
+  // --- Atlas Packing ---
+  msdf_atlas::TightAtlasPacker packer;
+  packer.setPixelRange(atlasData.pxRange);
+  // Let the packer determine the scale automatically based on glyphs and pixel range
+  // Or uncomment the next line to force a specific pixel size for the EM square
+  // packer.setScale(static_cast<double>(pixelHeight));
+  packer.setMiterLimit(miterLimit);
+  packer.pack(glyphs.data(), glyphs.size());
+
+  int width = 0, height = 0;
+  packer.getDimensions(width, height);
+  atlasData.atlasWidth = width;
+  atlasData.atlasHeight = height;
+
+  // **NEW**: Store the scale calculated by the packer. This is crucial for correct rendering.
+  atlasData.atlasScale = packer.getScale();
+  std::println("DEBUG: Atlas Packer Scale = {}", atlasData.atlasScale);
+  std::println("DEBUG: Atlas Dimensions after packing: Width = {}, Height = {}", width, height);
+  if (width <= 0 || height <= 0) {
+    return std::unexpected(std::format(
+        "MSDF-ATLAS-GEN: Failed to pack symbols. Atlas dimensions are invalid: w={}, h={}", width,
+        height));
+  }
+
+  // --- Atlas Generation (Using MTSDF) ---
+  // This generator produces MSDF in RGB and a true SDF in the Alpha channel.
+  msdf_atlas::GeneratorAttributes attributes;
+  attributes.config.overlapSupport = true;
+  attributes.scanlinePass = true;
+
+  // Use the mtsdfGenerator with 4 channels (byte-based)
+  msdf_atlas::ImmediateAtlasGenerator<
+      float,                                              // Intermediate format for processing
+      4,                                                  // 4 output channels (RGBA)
+      msdf_atlas::mtsdfGenerator,                         // The generator for MSDF+SDF
+      msdf_atlas::BitmapAtlasStorage<msdf_atlas::byte, 4> // Final storage format
+      >
+      generator(width, height);
+
+  generator.setAttributes(attributes);
+  generator.setThreadCount(4);
+  std::println("DEBUG: Generating MTSDF atlas bitmap...");
+  generator.generate(glyphs.data(), glyphs.size());
+  std::println("DEBUG: Atlas bitmap generation complete.");
+
+  msdfgen::BitmapConstRef<msdf_atlas::byte, 4> bitmap = generator.atlasStorage();
+  atlasData.atlasBitmap.assign(bitmap.pixels, bitmap.pixels + bitmap.width * bitmap.height * 4);
+
+  // Get font metrics
+  msdfgen::FontMetrics metrics;
+  if (!msdfgen::getFontMetrics(metrics, font, msdfgen::FONT_SCALING_NONE)) {
+    return std::unexpected("Failed to get font metrics");
+  }
+
+  atlasData.unitsPerEm = metrics.emSize;
+  atlasData.ascender = metrics.ascenderY;
+  atlasData.descender = metrics.descenderY;
+  atlasData.lineHeight = metrics.lineHeight;
+
+  // --- Store Glyph Metrics ---
+  std::println("DEBUG: Glyph metrics stored. Total glyphs: {}", glyphs.size());
+  for (const auto &glyph : glyphs) {
+    double l, b, r, t;
+    glyph.getQuadPlaneBounds(l, b, r, t);
+
+    double u, v, s, w;
+    glyph.getQuadAtlasBounds(u, v, s, w);
+
+    GlyphInfo info{};
+    // Normalize UVs to [0, 1] range
+    info.uv_x0 = static_cast<float>(u / atlasData.atlasWidth);
+    info.uv_y0 = static_cast<float>(w / atlasData.atlasHeight);
+    info.uv_x1 = static_cast<float>(s / atlasData.atlasWidth);
+    info.uv_y1 = static_cast<float>(v / atlasData.atlasHeight);
+
+    // Store glyph plane dimensions (in font units)
+    info.width = static_cast<float>(r - l);
+    info.height = static_cast<float>(t - b);
+
+    // Store bearing (in font units)
+    info.bearing_x = static_cast<float>(l);
+    info.bearing_y = static_cast<float>(t);
+
+    // Store advance (in font units)
+    info.advance = static_cast<float>(glyph.getAdvance());
+
+    atlasData.glyphs[glyph.getCodepoint()] = info;
+  }
+  std::println("DEBUG: Glyph metrics stored. Total glyphs in map: {}", atlasData.glyphs.size());
 
   return atlasData;
 }

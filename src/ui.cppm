@@ -5,7 +5,6 @@ module;
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
 export module vulkan_app:ui;
 
@@ -16,24 +15,12 @@ import :VulkanDevice;
 import :VulkanPipeline;
 import :VMA;
 import :texture;
-import :text; // For FontAtlasData
 
 constexpr void convertToCCW(std::vector<uint32_t> &indices) {
   for (size_t i = 0; i + 2 < indices.size(); i += 3) {
     std::swap(indices[i + 1], indices[i + 2]);
   }
 }
-
-export struct Font {
-  friend class TextSystem; // Allow renderer to access private members
-private:
-  FontAtlasData atlasData;
-  std::shared_ptr<Texture> texture;
-  vk::raii::DescriptorSet textureDescriptorSet{nullptr};
-
-public:
-  const FontAtlasData &getAtlasData() const { return atlasData; }
-};
 
 // The vertex layout for the single static quad.
 export struct TextQuadVertex {
@@ -45,16 +32,12 @@ export struct TextQuadVertex {
 // It will be sent to the shader via a storage buffer.
 export struct TextInstanceData {
   glm::vec2 screenPos; // Top-left position of the quad
-  glm::vec2 scale;     // width and height of the quad
+  glm::vec2 size;      // width and height of the quad
   glm::vec2 uvTopLeft;
   glm::vec2 uvBottomRight;
   glm::vec4 color; // NEW: Color is now per-instance
-};
-
-// A shared push constant struct for a simple orthographic projection.
-// All 2D pipelines can share a layout that expects this.
-export struct OrthoPushConstants {
-  glm::mat4 projection;
+  glm::vec3 _padding;
+  float pxRange;
 };
 
 export struct Sheet {
@@ -97,13 +80,8 @@ struct UIInstanceData {
   float _padding2[2]; // Padding for the next float4
 };
 
-export struct UIPushConstants {
-  glm::mat4 projection;
-};
-
 export struct RenderBatch {
   // A key for sorting. Lower numbers are drawn first.
-  // Can be used for layering (e.g., UI background = 100, UI foreground = 200)
   int sortKey{0};
 
   // Pipeline state
@@ -111,8 +89,8 @@ export struct RenderBatch {
   vk::raii::PipelineLayout const *pipelineLayout;
 
   // Resources to bind (Descriptor Sets)
-  vk::raii::DescriptorSet const *instanceDataSet{nullptr}; // Set 0: for instance SSBO
-  vk::raii::DescriptorSet const *textureSet{nullptr};      // Set 1: for textures (optional)
+  vk::raii::DescriptorSet const *instanceDataSet{nullptr};
+  vk::raii::DescriptorSet const *textureSet{nullptr};
 
   // Mesh data
   VmaBuffer const *vertexBuffer;
@@ -121,11 +99,16 @@ export struct RenderBatch {
 
   // Instancing data
   uint32_t instanceCount;
-  uint32_t firstInstance; // Base instance for vkCmdDrawIndexed
+  uint32_t firstInstance;
   uint32_t dynamicOffset{0};
 
-  // Custom comparison operator to enable sorting the render queue.
-  // This is the key to minimizing GPU state changes.
+  // --- NEW: Generic Push Constant Data ---
+  std::array<std::byte, 128> pushConstantData{}; // 128 bytes is the min guaranteed size
+  uint32_t pushConstantSize = 0;
+  vk::ShaderStageFlags pushConstantStages{};
+
+  // Comparison operator for sorting. We don't sort by push constants as they are expected to change
+  // frequently.
   bool operator<(const RenderBatch &other) const {
     if (sortKey != other.sortKey) {
       return sortKey < other.sortKey;
@@ -244,8 +227,7 @@ createInstanceBuffers(VulkanDevice &device, u32 frameCount, u32 size,
 
 // This is the core execution unit. It is stateless and simply processes
 // the command list given to it.
-export void processRenderQueue(const vk::raii::CommandBuffer &cmd, vk::Extent2D windowSize,
-                               RenderQueue &queue) {
+export void processRenderQueue(const vk::raii::CommandBuffer &cmd, RenderQueue &queue) {
   if (queue.empty()) {
     return;
   }
@@ -261,32 +243,34 @@ export void processRenderQueue(const vk::raii::CommandBuffer &cmd, vk::Extent2D 
     // 1. Bind Pipeline (only if it has changed)
     if (batch.pipeline != lastPipeline) {
       cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, *batch.pipeline);
-
-      glm::mat4 ortho = glm::ortho(0.0f, float(windowSize.width), 0.0f, float(windowSize.height),
-                                   0.0f, 1.0f // ← near=0, far=1
-      );
-      OrthoPushConstants pushConstant{ortho};
-      cmd.pushConstants<OrthoPushConstants>(*batch.pipelineLayout, vk::ShaderStageFlagBits::eVertex,
-                                            0, pushConstant);
-
       lastPipeline = batch.pipeline;
+
       // A new pipeline means we MUST rebind all descriptors and buffers.
       lastTextureSet = nullptr;
       lastVertexBuffer = nullptr;
       lastIndexBuffer = nullptr;
     }
+
+    // 2. Push Constants (ALWAYS, for every batch)
+    // This is cheap and ensures every draw has the correct data.
+    if (batch.pushConstantSize > 0) {
+      cmd.pushConstants<std::array<std::byte, 128>>(*batch.pipelineLayout, batch.pushConstantStages,
+                                                    0, // offset
+                                                    batch.pushConstantData);
+    }
+
+    // 3. Bind Descriptor Sets
     // Instance data is expected to be unique per-batch, so we always bind it.
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *batch.pipelineLayout, 0,
-                           {*batch.instanceDataSet},
-                           {batch.dynamicOffset}); // <--- PROVIDE OFFSET HERE
-    // 2. Bind Descriptor Sets
+                           {*batch.instanceDataSet}, {batch.dynamicOffset});
+
     if (batch.textureSet && batch.textureSet != lastTextureSet) {
       cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *batch.pipelineLayout, 1,
                              {*batch.textureSet}, {});
       lastTextureSet = batch.textureSet;
     }
 
-    // 3. Bind Buffers (only if they have changed)
+    // 4. Bind Buffers (only if they have changed)
     if (batch.vertexBuffer != lastVertexBuffer) {
       cmd.bindVertexBuffers(0, {batch.vertexBuffer->get()}, {0});
       lastVertexBuffer = batch.vertexBuffer;
@@ -296,7 +280,7 @@ export void processRenderQueue(const vk::raii::CommandBuffer &cmd, vk::Extent2D 
       lastIndexBuffer = batch.indexBuffer;
     }
 
-    // 4. Draw!
-    cmd.drawIndexed(batch.indexCount, batch.instanceCount, 0, 0, 0);
+    // 5. Draw!
+    cmd.drawIndexed(batch.indexCount, batch.instanceCount, 0, 0, batch.firstInstance);
   }
 }

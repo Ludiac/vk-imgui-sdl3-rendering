@@ -3,6 +3,7 @@ module;
 #include "macros.hpp"
 #include "primitive_types.hpp"
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 export module vulkan_app:TextSystem;
 
@@ -16,8 +17,12 @@ import :texture;
 import :text;
 import :ui;
 
+struct TextPushConstants2D {
+  glm::mat4 projection;
+  float sdf_weight;
+  i32 antiAliasingToggle;
+};
 // This class is responsible for laying out text and preparing it for rendering.
-// It no longer issues draw calls itself.
 export class TextSystem {
 private:
   VulkanDevice &device;
@@ -36,7 +41,6 @@ private:
 public:
   TextSystem(VulkanDevice &dev, u32 inFlightFrameCount, const vk::raii::DescriptorPool &pool)
       : device(dev), frameCount(inFlightFrameCount), maxQuadsPerFrame(2048) {
-    // Implementations for these helpers are unchanged from your original TextRenderer.cpp
     EXPECTED_VOID(createInstanceBuffers(device, frameCount, maxQuadsPerFrame, instanceBuffers,
                                         sizeof(TextInstanceData)));
     EXPECTED_VOID(createInstanceDataDescriptorSetLayout());
@@ -44,32 +48,49 @@ public:
     EXPECTED_VOID(createStaticQuadBuffers(device, staticVertexBuffer, staticIndexBuffer));
   }
 
-  void beginFrame() {
-    // for (decltype(auto) i : frameBatch)
-    //   i.second.clear();
-    frameBatch.clear();
-  }
+  void beginFrame() { frameBatch.clear(); }
 
-  // The public API for registering fonts and queueing text remains unchanged.
+  const vk::SamplerCreateInfo msdfFontSamplerCreateInfo{
+      .magFilter = vk::Filter::eLinear,
+      .minFilter = vk::Filter::eLinear,
+      .mipmapMode = vk::SamplerMipmapMode::eLinear, // Use Linear for smoother scaling
+      .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+      .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+      .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+      .mipLodBias = 0.0f,
+      .anisotropyEnable = true, // Anisotropy can help with slanted views of text
+      .maxAnisotropy = 4.0f,    // A modest value
+      .compareEnable = false,
+      .compareOp = vk::CompareOp::eAlways,
+      .minLod = 0.0f,
+      .maxLod = vk::LodClampNone, // Allow sampler to use all mip levels if they were generated
+      .borderColor = vk::BorderColor::eFloatTransparentBlack,
+      .unnormalizedCoordinates = false,
+  };
+
   [[nodiscard]] std::expected<Font *, std::string>
   registerFont(const std::string &fontPath, int pixelHeight,
-               const vk::raii::DescriptorSetLayout &textureLayout,
-               const vk::raii::DescriptorPool &pool, const vk::raii::Queue &transferQueue) {
-    // Unchanged from original TextRenderer.cpp
+               const vk::raii::DescriptorSetLayout &textureLayout) {
     auto font = std::make_unique<Font>();
-    auto atlasResult = createFontAtlas(fontPath, pixelHeight);
+    auto atlasResult = createFontAtlasMSDF(fontPath, pixelHeight);
     if (!atlasResult)
       return std::unexpected("Failed to create font atlas: " + atlasResult.error());
     font->atlasData = std::move(*atlasResult);
+
     auto texResult = createTexture(
         device, font->atlasData.atlasBitmap.data(), font->atlasData.atlasBitmap.size(),
         vk::Extent3D{(u32)font->atlasData.atlasWidth, (u32)font->atlasData.atlasHeight, 1},
-        vk::Format::eR8Unorm, transferQueue, false);
+        vk::Format::eR8G8B8A8Unorm, device.queue_,
+        false, // generateMipmaps = false for MSDF
+        {}, {}, 1, vk::ImageViewType::e2D, &msdfFontSamplerCreateInfo);
+
     if (!texResult)
       return std::unexpected("Failed to create font texture: " + texResult.error());
     font->texture = std::make_shared<Texture>(std::move(*texResult));
-    vk::DescriptorSetAllocateInfo allocInfo{
-        .descriptorPool = pool, .descriptorSetCount = 1, .pSetLayouts = &*textureLayout};
+
+    vk::DescriptorSetAllocateInfo allocInfo{.descriptorPool = device.descriptorPool_,
+                                            .descriptorSetCount = 1,
+                                            .pSetLayouts = &*textureLayout};
     auto setResult = device.logical().allocateDescriptorSets(allocInfo);
     if (!setResult)
       return std::unexpected("Failed to allocate font descriptor set.");
@@ -87,75 +108,117 @@ public:
     return registeredFonts.back().get();
   }
 
-  void queueText(Font *font, const std::string &text, float x, float y, const glm::vec4 &color) {
-    // Unchanged from original TextRenderer.cpp
+  // Example DPI, adjust to your target display if known, otherwise 96.0 is a safe default.
+  const float SYSTEM_DPI = 96.0f * 8;
+
+  void queueText(Font *font, const std::string &text, u32 pointSize, float x, float y,
+                 const glm::vec4 &color) {
     if (!font || text.empty())
       return;
-    const auto &glyphs = font->getAtlasData().glyphs;
+
+    // 1. Convert font point size to a target pixel height for the EM square.
+    const float desiredPixelHeightForEm = static_cast<float>(pointSize) * (SYSTEM_DPI / 72.0f);
+
+    const auto &metrics = font->atlasData;
+    const float baselineY = y;
+
     auto &instanceVec = frameBatch[font];
     float cursorX = x;
-    float baselineY = y;
+
+    // 2. Calculate the scale factor to convert from abstract font units to screen pixels.
+    const float fontUnitToPixelScale = desiredPixelHeightForEm / metrics.unitsPerEm;
+
     for (char c : text) {
-      if (instanceVec.size() + frameBatch.size() > maxQuadsPerFrame)
-        break;
-      const GlyphInfo &gi = glyphs.count(c) ? glyphs.at(c) : glyphs.at('?');
-      if (gi.width > 0 && gi.height > 0) {
-        float xpos = cursorX + gi.bearing_x;
-        float ypos = baselineY - gi.bearing_y;
-        instanceVec.emplace_back(TextInstanceData{.screenPos = {xpos, ypos},
-                                                  .scale = {gi.width, gi.height},
-                                                  .uvTopLeft = {gi.uv_x0, gi.uv_y0},
-                                                  .uvBottomRight = {gi.uv_x1, gi.uv_y1},
-                                                  .color = color});
+      auto it = metrics.glyphs.find(static_cast<u32>(c));
+      if (it == metrics.glyphs.end()) {
+        it = metrics.glyphs.find(static_cast<u32>('?')); // Fallback
+        if (it == metrics.glyphs.end())
+          continue;
       }
-      cursorX += gi.advance;
+
+      const auto &gi = it->second;
+
+      // 3. Calculate the final on-screen size of the glyph quad in pixels.
+      float scaledQuadWidth = gi.width * fontUnitToPixelScale;
+      float scaledQuadHeight = gi.height * fontUnitToPixelScale;
+
+      // 4. Calculate the on-screen position of the quad's top-left corner.
+      float xpos = cursorX + (gi.bearing_x * fontUnitToPixelScale);
+      float ypos = baselineY - (gi.bearing_y * fontUnitToPixelScale);
+
+      // 5. **CRITICAL FIX**: Calculate the correct pixel range for the shader.
+      // This converts the atlas pxRange into the on-screen pxRange.
+      // It considers the atlas's internal scale and the final font-to-pixel scale.
+      const float shaderPxRange =
+          font->atlasData.pxRange * font->atlasData.atlasScale * fontUnitToPixelScale;
+
+      instanceVec.emplace_back(TextInstanceData{
+          .screenPos = {xpos, ypos},
+          .size = {scaledQuadWidth, scaledQuadHeight},
+          .uvTopLeft = {gi.uv_x0, gi.uv_y0},
+          .uvBottomRight = {gi.uv_x1, gi.uv_y1},
+          .color = color,
+          .pxRange = shaderPxRange,
+      });
+
+      // 6. Advance the cursor for the next character.
+      cursorX += gi.advance * fontUnitToPixelScale;
     }
   }
 
-  // REPLACES the old `draw` method.
-  void prepareBatches(RenderQueue &queue, const VulkanPipeline &textPipeline, u32 frameIndex) {
+  void prepareBatches(RenderQueue &queue, const VulkanPipeline &textPipeline, u32 frameIndex,
+                      vk::Extent2D windowSize, float sdf_weight, i32 antiAliasingToggle) {
     if (frameBatch.empty())
       return;
 
+    glm::mat4 ortho = glm::ortho(0.0f, (float)windowSize.width, 0.0f, (float)windowSize.height);
+
     u32 currentFirstInstance = 0;
-    uint32_t currentByteOffset = 0; // <--- Track byte offset
+    uint32_t currentByteOffset = 0;
     VmaBuffer &currentInstanceBuffer = instanceBuffers[frameIndex];
 
     for (auto const &[font, instances] : frameBatch) {
       if (instances.empty())
         continue;
 
-      // 1. Copy instance data for this font batch to the GPU SSBO at the correct offset
       size_t dataSize = instances.size() * sizeof(TextInstanceData);
       if (currentByteOffset + dataSize > currentInstanceBuffer.getAllocationInfo().size) {
-        // Consider logging this warning instead of printing to stdout
         break;
       }
       std::memcpy(static_cast<char *>(currentInstanceBuffer.getMappedData()) + currentByteOffset,
                   instances.data(), dataSize);
 
-      // 2. Create a batch for THIS FONT and add it to the queue
-      queue.emplace_back(RenderBatch{
-          .sortKey = 200, // Text on top of UI
-          .pipeline = &textPipeline.pipeline,
-          .pipelineLayout = &textPipeline.pipelineLayout,
-          .instanceDataSet = &instanceDataDescriptorSets[frameIndex], // Points to the big SSBO
-          .textureSet = &font->textureDescriptorSet, // The unique texture for this font!
-          .vertexBuffer = &staticVertexBuffer,
-          .indexBuffer = &staticIndexBuffer,
-          .indexCount = 6,
-          .instanceCount = static_cast<u32>(instances.size()),
-          .firstInstance = 0, // <--- IMPORTANT: This is now 0!
-          .dynamicOffset = currentByteOffset,
-      });
+      RenderBatch batch;
+      batch.sortKey = 200;
+      batch.pipeline = &textPipeline.pipeline;
+      batch.pipelineLayout = &textPipeline.pipelineLayout;
+      batch.instanceDataSet = &instanceDataDescriptorSets[frameIndex];
+      batch.textureSet = &font->textureDescriptorSet;
+      batch.vertexBuffer = &staticVertexBuffer;
+      batch.indexBuffer = &staticIndexBuffer;
+      batch.indexCount = 6;
+      batch.instanceCount = static_cast<u32>(instances.size());
+      batch.firstInstance = 0;
+      batch.dynamicOffset = currentByteOffset;
+
+      TextPushConstants2D pc;
+      pc.projection = ortho;
+      pc.sdf_weight = sdf_weight;
+      pc.antiAliasingToggle = antiAliasingToggle;
+
+      batch.pushConstantSize = sizeof(TextPushConstants2D);
+      batch.pushConstantStages =
+          vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+      std::memcpy(batch.pushConstantData.data(), &pc, sizeof(TextPushConstants2D));
+
+      queue.push_back(batch);
 
       currentFirstInstance += static_cast<u32>(instances.size());
       size_t alignedSize = pad_uniform_buffer_size(dataSize, this->minStorageBufferOffsetAlignment);
-      currentByteOffset += static_cast<uint32_t>(alignedSize);
+      currentByteOffset += static_cast<u32>(alignedSize);
 
-      // Bounds check
       if (currentByteOffset > currentInstanceBuffer.getAllocationInfo().size) {
-        // Log a warning/error, you've run out of buffer space
+        std::println("run out of buffer space");
         break;
       }
     }
@@ -163,14 +226,12 @@ public:
   }
 
 private:
-  // All private helper methods for buffer and descriptor set creation
-  // remain unchanged from your original TextRenderer.cpp. They should be copied over.
   [[nodiscard]] std::expected<void, std::string> createInstanceDataDescriptorSetLayout() {
-    vk::DescriptorSetLayoutBinding instanceBinding{.binding = 0,
-                                                   .descriptorType =
-                                                       vk::DescriptorType::eStorageBufferDynamic,
-                                                   .descriptorCount = 1,
-                                                   .stageFlags = vk::ShaderStageFlagBits::eVertex};
+    vk::DescriptorSetLayoutBinding instanceBinding{
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eStorageBufferDynamic,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eVertex}; // Also needed in fragment
     vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1, .pBindings = &instanceBinding};
     auto layoutResult = device.logical().createDescriptorSetLayout(layoutInfo);
     if (!layoutResult)
@@ -199,6 +260,7 @@ private:
     };
     vk::WriteDescriptorSet instanceWrite{.dstSet = instanceDataDescriptorSets[frameIndex],
                                          .dstBinding = 0,
+                                         .dstArrayElement = 0,
                                          .descriptorCount = 1,
                                          .descriptorType =
                                              vk::DescriptorType::eStorageBufferDynamic,

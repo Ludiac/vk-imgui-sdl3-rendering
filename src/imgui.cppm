@@ -25,6 +25,15 @@ export void RenderShaderTogglesMenu(ShaderTogglesUBO &toggles) {
   ImGui::End();
 }
 
+export void RenderTextMenu(i32 &fontSizeMultiplier, float &sdf_weight, i32 &antiAliasing) {
+  if (ImGui::Begin("Text Parameters")) {
+    ImGui::SliderInt("fontSizeMultiplier", &fontSizeMultiplier, -10, 50);
+    ImGui::SliderFloat("sdf_weight", &sdf_weight, 0.0f, 1.0f);
+    ImGui::Checkbox("Anti Aliasing", (bool *)&antiAliasing);
+  }
+  ImGui::End();
+}
+
 void renderMeshControlsMenu(f32 framerate, const Scene &scene) {
   ImGui::Begin("mesh controls");
   for (size_t i = 0; i < scene.nodes.size(); ++i) {

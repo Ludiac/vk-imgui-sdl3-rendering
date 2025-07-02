@@ -18,7 +18,6 @@ export module vulkan_app:tinygltf; // Your module name
 
 // Exporting selected parts of tinygltf
 export namespace gltfm {
-
 // --- Core Classes ---
 using tinygltf::Accessor;
 using tinygltf::Animation;

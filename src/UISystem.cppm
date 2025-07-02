@@ -3,6 +3,7 @@ module;
 #include "macros.hpp"
 #include "primitive_types.hpp"
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 export module vulkan_app:UISystem;
 
@@ -13,6 +14,10 @@ import :VulkanDevice;
 import :VulkanPipeline;
 import :VMA;
 import :ui; // For Sheet, UIInstanceData, etc.
+
+export struct UIPushConstants2D {
+  glm::mat4 projection;
+};
 
 // This class is responsible for managing and preparing UI geometry for rendering.
 // It no longer issues draw calls itself.
@@ -56,7 +61,10 @@ public:
 
   // REPLACES the old `draw` method.
   // This method prepares the data and adds a RenderBatch to the queue.
-  void prepareBatches(RenderQueue &queue, const VulkanPipeline &uiPipeline, u32 frameIndex) {
+  void prepareBatches(RenderQueue &queue, const VulkanPipeline &uiPipeline, u32 frameIndex,
+                      vk::Extent2D windowSize) {
+    glm::mat4 ortho = glm::ortho(0.0f, (float)windowSize.width, 0.0f, (float)windowSize.height);
+
     if (frameIndex >= frameCount || queuedInstances.empty()) {
       return;
     }
@@ -71,23 +79,28 @@ public:
     }
     std::memcpy(static_cast<char *>(currentInstanceBuffer.getMappedData()), queuedInstances.data(),
                 dataSize);
+    RenderBatch batch{
+        .sortKey = 100, // UI background elements could have a low sort key
+        .pipeline = &uiPipeline.pipeline,
+        .pipelineLayout = &uiPipeline.pipelineLayout,
+        .instanceDataSet = &instanceDataDescriptorSets[frameIndex],
+        .textureSet = nullptr, // No texture for basic UI sheets
+        .vertexBuffer = &staticVertexBuffer,
+        .indexBuffer = &staticIndexBuffer,
+        .indexCount = 6, // Quad has 6 indices
+        .instanceCount = static_cast<u32>(queuedInstances.size()),
+        .firstInstance = 0,
+        .dynamicOffset = 0,
+        // .scale = {0, 0},
+    };
 
-    // 2. Create a batch for all UI elements and add it to the queue.
-    // Since all UI elements are in one contiguous block starting at offset 0,
-    // the dynamicOffset for the batch should be 0.
-    queue.emplace_back(
-        RenderBatch{.sortKey = 100, // UI background elements could have a low sort key
-                    .pipeline = &uiPipeline.pipeline,
-                    .pipelineLayout = &uiPipeline.pipelineLayout,
-                    .instanceDataSet = &instanceDataDescriptorSets[frameIndex],
-                    .textureSet = nullptr, // No texture for basic UI sheets
-                    .vertexBuffer = &staticVertexBuffer,
-                    .indexBuffer = &staticIndexBuffer,
-                    .indexCount = 6, // Quad has 6 indices
-                    .instanceCount = static_cast<u32>(queuedInstances.size()),
-                    .firstInstance = 0,
-                    .dynamicOffset =
-                        0}); // This should be 0 if the entire data for the batch starts at offset 0
+    UIPushConstants2D pc;
+    pc.projection = ortho;
+    batch.pushConstantSize = sizeof(UIPushConstants2D);
+    batch.pushConstantStages = vk::ShaderStageFlagBits::eVertex;
+    std::memcpy(batch.pushConstantData.data(), &pc, sizeof(UIPushConstants2D));
+
+    queue.emplace_back(batch);
 
     // Update the descriptor set to reflect the *actual* number of instances we're drawing this
     // frame.

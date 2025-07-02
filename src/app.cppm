@@ -34,28 +34,33 @@ import :imgui;
 import :TextSystem;
 import :UISystem;
 import :ui;
+import :TextArea;
 
 namespace { // Anonymous namespace for internal linkage
 constexpr u32 MIN_IMAGE_COUNT = 2;
 
-// std::vector<Vertex> createQuadVertices(const glm::vec3 &center, float width, float height,
-//                                        const glm::vec3 &normal) {
-//   float halfW = width / 2.0f;
-//   float halfH = height / 2.0f;
-//   return {
-//       // Bottom-left
-//       {center + glm::vec3(-halfW, -halfH, 0.0f), normal, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-//       // Bottom-right
-//       {center + glm::vec3(halfW, -halfH, 0.0f), normal, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-//       // Top-left
-//       {center + glm::vec3(-halfW, halfH, 0.0f), normal, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
-//       // Top-right
-//       {center + glm::vec3(halfW, halfH, 0.0f), normal, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}};
-// }
-//
-// std::vector<u32> createQuadIndices() {
-//   return {0, 1, 2, 1, 3, 2}; // Two triangles
-// }
+std::vector<Vertex> createQuadVertices(const glm::vec3 &center, float width, float height,
+                                       const glm::vec3 &normal) {
+  float halfW = width / 2.0f;
+  float halfH = height / 2.0f;
+  return {
+      // Bottom-left
+      {center + glm::vec3(-halfW, -halfH, 0.0f), normal, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+      // Bottom-right
+      {center + glm::vec3(halfW, -halfH, 0.0f), normal, {1.0f, 0.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+      // Top-left
+      {center + glm::vec3(-halfW, halfH, 0.0f), normal, {0.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}},
+      // Top-right
+      {center + glm::vec3(halfW, halfH, 0.0f), normal, {1.0f, 1.0f}, {1.0f, 0.0f, 0.0f, 1.0f}}};
+}
+
+std::vector<u32> createQuadIndices() {
+  // std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
+  // convertToCCW(indices);
+  // return indices;
+
+  return {0, 1, 2, 1, 3, 2}; // Two triangles
+}
 
 std::vector<Vertex> createAxisLineVertices(const glm::vec3 &start, const glm::vec3 &end,
                                            const glm::vec3 &normal_placeholder) {
@@ -116,18 +121,24 @@ export class App {
 
   Camera camera;
 
-  std::vector<Font *> availableFonts;
   std::unique_ptr<TextSystem> textSystem;
   std::unique_ptr<UISystem> uiSystem;
+  std::vector<Font *> registeredFonts;
 
   BS::thread_pool<> thread_pool;
   std::vector<LoadedGltfScene> loadedGltfData;
   std::mutex loadedGltfDataMutex;
 
-public:
-  // Create the single combined descriptor set layout for meshes
-  std::expected<void, std::string> createDescriptorSetLayouts() NOEXCEPT {
+  // Added for asynchronous font loading
+  std::vector<std::future<std::expected<Font *, std::string>>> fontLoadFutures;
+  std::mutex fontFuturesMutex;
 
+  float sdf_weight{0.0};
+  i32 fontSizeMultiplier{0};
+  i32 textAntiAliasingToggle{1};
+
+public:
+  std::expected<void, std::string> createDescriptorSetLayouts() NOEXCEPT {
     std::vector<vk::DescriptorSetLayoutBinding> meshDataBindings = {
         {// Binding 0: MVP Uniform Buffer Object (Vertex Shader)
          .binding = 0,
@@ -330,18 +341,24 @@ public:
 
     auto instanceSetLayout = device.logical().createDescriptorSetLayout(instanceLayoutInfo).value();
     // The text pipeline layout will also use a push constant to send per-quad data like color.
-    vk::PushConstantRange pushConstantRange{
+    vk::PushConstantRange textPushConstantRange{
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        .offset = 0,
+        .size = sizeof(std::array<std::byte, 128>),
+    };
+
+    vk::PushConstantRange uiPushConstantRange{
         .stageFlags = vk::ShaderStageFlagBits::eVertex,
         .offset = 0,
-        .size = sizeof(OrthoPushConstants) // We will push a color vector
+        .size = sizeof(std::array<std::byte, 128>),
     };
 
     std::vector<vk::DescriptorSetLayout> textLayouts = {*instanceSetLayout, *textSetLayout};
-    std::vector<vk::PushConstantRange> constantRanges = {pushConstantRange};
+    std::vector<vk::PushConstantRange> constantRanges = {textPushConstantRange};
     EXPECTED_VOID(textPipeline.createPipelineLayout(device.logical(), textLayouts, constantRanges));
 
     std::vector<vk::DescriptorSetLayout> uiLayouts = {*instanceSetLayout};
-    std::vector<vk::PushConstantRange> uiPCRanges = {pushConstantRange};
+    std::vector<vk::PushConstantRange> uiPCRanges = {uiPushConstantRange};
     EXPECTED_VOID(uiPipeline.createPipelineLayout(device.logical(), uiLayouts, uiPCRanges));
 
     std::vector<vk::PipelineShaderStageCreateInfo> textShaderStages = {
@@ -456,31 +473,73 @@ public:
   }
 
   void createDebugFontAtlasQuad(u32 currentImageCount) {
-    // if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
-    //   std::println("Error: Main pipeline not initialized for debug quad.");
-    //   return;
-    // }
-    //
-    // // Create quad geometry
-    // glm::vec3 center(0.0f, 0.0f, -5.0f); // Position in front of camera
-    // float width = mainFont.atlasWidth;
-    // float height = mainFont.atlasHeight;
-    // glm::vec3 normal(0.0f, 0.0f, 1.0f);
-    //
-    // Material quadMaterial;
-    // PBRTextures quadTextures = textureStore.getAllDefaultTextures();
-    // // quadTextures.baseColor = textRenderer->getFontTexture();
-    //
-    // auto quadMesh = std::make_unique<Mesh>(
-    //     device, "DebugFontAtlasQuad", createQuadVertices(center, width / 32, height / 32,
-    //     normal), createQuadIndices(), quadMaterial, quadTextures, currentImageCount);
-    //
-    // appOwnedMeshes.emplace_back(std::move(quadMesh));
-    //
-    // scene.createNode({.mesh = appOwnedMeshes.back().get(),
-    //                   .pipeline = &graphicsPipelines[0], // Use main textured pipeline
-    //                   .name = "DebugFontAtlasQuad_Node"},
-    //                  device.descriptorPool_, combinedMeshLayout);
+    if (registeredFonts.empty())
+      return;
+
+    if (graphicsPipelines.empty() || !*graphicsPipelines[0].pipeline) {
+      std::println("Error: Main pipeline not initialized for debug quad.");
+      return;
+    }
+
+    // Create quad geometry
+    glm::vec3 center(0.0f, 0.0f, -5.0f);                   // Position in front of camera
+    auto font = registeredFonts[0]->atlasData.atlasBitmap; // Assuming this is your float pixel data
+    glm::vec3 normal(0.0f, 0.0f, 1.0f);
+
+    auto width = registeredFonts[0]->atlasData.atlasWidth;
+    auto height = registeredFonts[0]->atlasData.atlasHeight;
+
+    // --- Pixel Data Normalization ---
+    // Assuming atlasBitmap is std::vector<float> and stores R, G, B consecutively
+    // For example, if your atlasBitmap has 3 components per pixel (RGB)
+    std::vector<unsigned char> normalizedPixels(
+        font.size()); // Create a new vector for normalized data
+
+    // Lambda to convert a single float value to unsigned char (0-255)
+    auto normalizePixelComponent = [](float value) -> unsigned char {
+      // Clamp negative values to 0
+      float clampedValue = std::max(0.0f, value);
+      // Scale from (0, 1) to (0, 255). Since original range is (-1, 1),
+      // we scale the positive part (0, 1) to (0, 255).
+      // If your original data spans -1 to 1 and you want to map -1 to 0, 0 to 127.5, and 1 to 255,
+      // the scaling would be different. But based on "negative values are to be 0",
+      // we treat the effective range for scaling as [0, 1].
+      return static_cast<unsigned char>(clampedValue * 255.0f);
+    };
+
+    // Apply the lambda to each float in the original font data
+    std::transform(font.begin(), font.end(), normalizedPixels.begin(), normalizePixelComponent);
+    // --- End Pixel Data Normalization ---
+
+    // Convert RGB (3 components) to RGBA (4 components)
+    std::vector<unsigned char> finalPixelData;
+    finalPixelData.reserve(width * height * 4); // Reserve space for RGBA
+    for (size_t i = 0; i < font.size(); i += 3) {
+      finalPixelData.push_back(normalizedPixels[i]);     // R
+      finalPixelData.push_back(normalizedPixels[i + 1]); // G
+      finalPixelData.push_back(normalizedPixels[i + 2]); // B
+      finalPixelData.push_back(255);                     // A (Opaque)
+    }
+    Material quadMaterial;
+    PBRTextures quadTextures = textureStore.getAllDefaultTextures();
+    quadTextures.baseColor = textureStore.getTextureFromData({
+        .pixels = finalPixelData, // Use the normalized pixel data here
+        .width = width,
+        .height = height,
+        .component = 4, // Assuming 3 components (R, G, B)
+        .isSrgb = true,
+    });
+
+    auto quadMesh = std::make_unique<Mesh>(
+        device, "DebugFontAtlasQuad", createQuadVertices(center, width / 64, height / 64, normal),
+        createQuadIndices(), quadMaterial, quadTextures, currentImageCount);
+
+    appOwnedMeshes.emplace_back(std::move(quadMesh));
+
+    scene.createNode({.mesh = appOwnedMeshes.back().get(),
+                      .pipeline = &graphicsPipelines[0], // Use main textured pipeline
+                      .name = "DebugFontAtlasQuad_Node"},
+                     device.descriptorPool_, combinedMeshLayout);
   }
 
   void createDebugAxesScene(u32 currentImageCount) {
@@ -636,11 +695,9 @@ public:
     if (acquireRes == vk::Result::eErrorOutOfDateKHR || acquireRes == vk::Result::eSuboptimalKHR) {
       swapChainRebuild = true;
       if (acquireRes == vk::Result::eErrorOutOfDateKHR) {
-
         return;
       }
     } else if (acquireRes != vk::Result::eSuccess) {
-
       std::println("Error acquiring swapchain image: {}", vk::to_string(acquireRes));
       return;
     }
@@ -721,22 +778,87 @@ public:
                         static_cast<float>(wd.config.swapchainExtent.height), 0.0f, 1.0f});
     currentFrame.CommandBuffer.setScissor(0, vk::Rect2D{{0, 0}, wd.config.swapchainExtent});
 
-    // scene.draw(currentFrame.CommandBuffer, wd.FrameIndex);
+    scene.draw(currentFrame.CommandBuffer, wd.FrameIndex);
+
+    static TextArea textArea{300, 200};
 
     textSystem->beginFrame();
     uiSystem->beginFrame();
 
     RenderQueue renderQueue;
 
-    textSystem->queueText(availableFonts[0], "Hello, Vulkan!", 100.f, 200.f, {1.f, 1.f, 1.f, 1.f});
-    textSystem->queueText(availableFonts[1], "Vulkan!?", 200.f, 100.f, {0.f, 0.f, 1.f, 1.f});
-    textSystem->queueText(availableFonts[1], "An apple", 600.f, 100.f, {0.f, 1.f, 1.f, 1.f});
+    {
+      // Define colors
+      glm::vec4 color1 = {1.f, 1.f, 0.f, 1.f}; // Yellow
+      glm::vec4 color2 = {1.f, 0.f, 1.f, 1.f}; // Magenta
+      glm::vec4 color3 = {0.f, 1.f, 1.f, 1.f}; // Cyan
+
+      // Define base positions and offsets
+      float startX = 100.f;
+      float startY = 100.f;
+
+      // Offsets for the different text positions within each font's set
+      float offsetX1 = 0.f;
+      float offsetY1 = 0.f; // (100, 100)
+
+      float offsetX2 = 600.f;
+      float offsetY2 = 200.f; // (700, 300)
+
+      float offsetX3 = 600.f;
+      float offsetY3 = 700.f; // (700, 800)
+
+      float offsetX4 = 0.f;
+      float offsetY4 = 400.f; // (100, 500)
+
+      float font2YOffset = 100.f; // Offset for the second font relative to the first
+      float font3YOffset = 100.f; // Offset for the third font relative to the second
+
+      if (!registeredFonts.empty()) {
+        textSystem->queueText(registeredFonts[0], "Vulkan", 15 + fontSizeMultiplier,
+                              startX + offsetX1, startY + offsetY1, color1);
+        textSystem->queueText(registeredFonts[0], "Vulkan", 30 + fontSizeMultiplier,
+                              startX + offsetX4, startY + offsetY4, color1);
+        textSystem->queueText(registeredFonts[0], "Vulkan", 60 + fontSizeMultiplier,
+                              startX + offsetX2, startY + offsetY2, color1);
+        textSystem->queueText(registeredFonts[0], "Vulkan", 120 + fontSizeMultiplier,
+                              startX + offsetX3, startY + offsetY3, color1);
+      }
+
+      if (registeredFonts.size() > 1) {
+        // Apply font2YOffset to all Y coordinates for the second font
+        textSystem->queueText(registeredFonts[1], "Vulkan", 15 + fontSizeMultiplier,
+                              startX + offsetX1, startY + offsetY1 + font2YOffset, color2);
+        textSystem->queueText(registeredFonts[1], "Vulkan", 30 + fontSizeMultiplier,
+                              startX + offsetX4, startY + offsetY4 + font2YOffset, color2);
+        textSystem->queueText(registeredFonts[1], "Vulkan", 60 + fontSizeMultiplier,
+                              startX + offsetX2, startY + offsetY2 + font2YOffset, color2);
+        textSystem->queueText(registeredFonts[1], "Vulkan", 120 + fontSizeMultiplier,
+                              startX + offsetX3, startY + offsetY3 + font2YOffset, color2);
+      }
+
+      if (registeredFonts.size() > 2) {
+        // Apply font2YOffset + font3YOffset to all Y coordinates for the third font
+        // This makes the third font offset from the second, which is already offset from the first.
+        textSystem->queueText(registeredFonts[2], "Vulkan", 15 + fontSizeMultiplier,
+                              startX + offsetX1, startY + offsetY1 + font2YOffset + font3YOffset,
+                              color3);
+        textSystem->queueText(registeredFonts[2], "Vulkan", 30 + fontSizeMultiplier,
+                              startX + offsetX4, startY + offsetY4 + font2YOffset + font3YOffset,
+                              color3);
+        textSystem->queueText(registeredFonts[2], "Vulkan", 60 + fontSizeMultiplier,
+                              startX + offsetX2, startY + offsetY2 + font2YOffset + font3YOffset,
+                              color3);
+        textSystem->queueText(registeredFonts[2], "Vulkan", 120 + fontSizeMultiplier,
+                              startX + offsetX3, startY + offsetY3 + font2YOffset + font3YOffset,
+                              color3);
+      }
+    }
 
     uiSystem->queueSheet(
         {
             .position = {200, 200},
             .size = {300, 300},
-            .backgroundColor = {1.f, 1.f, 0.f, 1.0f},
+            .backgroundColor = {0.f, 1.f, 0.f, 1.0f},
         },
         0.f);
 
@@ -748,10 +870,11 @@ public:
         },
         0.f);
 
-    textSystem->prepareBatches(renderQueue, textPipeline, wd.FrameIndex);
-    uiSystem->prepareBatches(renderQueue, uiPipeline, wd.FrameIndex);
+    textSystem->prepareBatches(renderQueue, textPipeline, wd.FrameIndex, wd.config.swapchainExtent,
+                               sdf_weight, textAntiAliasingToggle);
+    uiSystem->prepareBatches(renderQueue, uiPipeline, wd.FrameIndex, wd.config.swapchainExtent);
 
-    processRenderQueue(currentFrame.CommandBuffer, wd.config.swapchainExtent, renderQueue);
+    processRenderQueue(currentFrame.CommandBuffer, renderQueue);
 
     ImGui_ImplVulkan_RenderDrawData(draw_data, *currentFrame.CommandBuffer);
 
@@ -885,6 +1008,32 @@ public:
         instanceGltfModel(scene, wd.Frames.size());
       }
 
+      // Process completed font loading futures
+      {
+        std::lock_guard lock(fontFuturesMutex);
+        // Using a temporary vector to collect completed futures
+        std::vector<std::future<std::expected<Font *, std::string>>> readyFutures;
+        for (auto it = fontLoadFutures.begin(); it != fontLoadFutures.end();) {
+          if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            readyFutures.push_back(std::move(*it));
+            it = fontLoadFutures.erase(it);
+          } else {
+            ++it;
+          }
+        }
+
+        for (auto &future : readyFutures) {
+          auto res = future.get(); // Get the result of the future
+          if (res) {
+            registeredFonts.emplace_back(*res);
+            // std::println("font loaded");
+            // createDebugFontAtlasQuad(static_cast<u32>(wd.Frames.size()));
+          } else {
+            std::println("failed to load font asynchronously: {}", res.error());
+          }
+        }
+      }
+
       readKeyboard(deltaTime, sdl_window);
       camera.updateVectors();
 
@@ -922,6 +1071,7 @@ public:
         RenderVulkanStateWindow(device, wd, 120, deltaTime);
         RenderLightControlMenu(sceneLightsCpuBuffer);
         RenderShaderTogglesMenu(shaderTogglesCpuBuffer);
+        RenderTextMenu(fontSizeMultiplier, sdf_weight, textAntiAliasingToggle);
         RenderSceneHierarchyMaterialEditor(scene, wd.FrameIndex);
       }
 
@@ -948,21 +1098,25 @@ public:
     vk::raii::DescriptorSetLayout uiSetLayout{nullptr};
     createTextPipeline(textSetLayout, uiSetLayout);
     textSystem = std::make_unique<TextSystem>(device, wd.Frames.size(), device.descriptorPool_);
-    auto res =
-        textSystem->registerFont("../assets/fonts/Inconsolata/InconsolataNerdFontMono-Regular.ttf",
-                                 48, textSetLayout, device.descriptorPool_, device.queue_);
-    if (!res) {
-      std::println("failed to create 1 font");
-    }
-    availableFonts.emplace_back(*res);
 
-    auto res2 =
-        textSystem->registerFont("../assets/fonts/Inconsolata/InconsolataNerdFontMono-Bold.ttf", 48,
-                                 textSetLayout, device.descriptorPool_, device.queue_);
-    if (!res2) {
-      std::println("failed to create 1 font");
+    // Submit font loading tasks to the thread pool
+    {
+      std::lock_guard lock(fontFuturesMutex);
+      fontLoadFutures.emplace_back(thread_pool.submit_task([this, &textSetLayout]() {
+        return textSystem->registerFont("../assets/fonts/ComicSans/ComicSansMS400.ttf", 64,
+                                        textSetLayout);
+      }));
+
+      fontLoadFutures.emplace_back(thread_pool.submit_task([this, &textSetLayout]() {
+        return textSystem->registerFont(
+            "../assets/fonts/Inconsolata/InconsolataNerdFontMono-Regular.ttf", 64, textSetLayout);
+      }));
+
+      fontLoadFutures.emplace_back(thread_pool.submit_task([this, &textSetLayout]() {
+        return textSystem->registerFont("../assets/fonts/Queensides/Queensides-3z7Ey.ttf", 64,
+                                        textSetLayout);
+      }));
     }
-    availableFonts.emplace_back(*res2);
 
     uiSystem = std::make_unique<UISystem>(device, wd.Frames.size(), device.descriptorPool_);
 
@@ -970,8 +1124,6 @@ public:
     EXPECTED_VOID(SetupShaderToggles()); // NEW: Setup toggles UBO
 
     scene = Scene(static_cast<u32>(wd.Frames.size()));
-
-    createDebugFontAtlasQuad(static_cast<u32>(wd.Frames.size()));
 
     auto future = thread_pool.submit_task([this] {
       // return loadGltfModel("../assets/models/woman/scene.gltf", "../assets/models/woman/");

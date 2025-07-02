@@ -122,7 +122,7 @@ export struct VulkanPipeline {
         .depthClampEnable = false,        // Usually false
         .rasterizerDiscardEnable = false, // Usually false
         .polygonMode = vk::PolygonMode::eFill,
-        .cullMode = vk::CullModeFlagBits::eNone,
+        .cullMode = vk::CullModeFlagBits::eBack,
         .frontFace = vk::FrontFace::eClockwise,
 
         .depthBiasEnable = false,

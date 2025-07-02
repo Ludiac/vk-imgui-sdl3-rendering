@@ -1,5 +1,6 @@
 struct PushConstants {
-    float4x4 projection;
+  float4x4 projection;
+  float _padding[16];
 };
 
 // Matches the static unit quad vertex format
