@@ -17,11 +17,21 @@ import :texture;
 import :text;
 import :ui;
 
+export struct TextToggles {
+  float sdf_weight{0.0f};
+  float pxRangeDirectAdditive{0.78f};
+  i32 antiAliasingMode{2}; // Corresponds to AA_LINEAR by default
+  float start_fade_px{0.5};
+  float end_fade_px{1.0};
+  i32 num_stages{1};
+  i32 rounding_direction{2}; // 0=down, 1=up, 2=nearest
+};
+
 struct TextPushConstants2D {
   glm::mat4 projection;
-  float sdf_weight;
-  i32 antiAliasingToggle;
+  TextToggles textToggles;
 };
+
 // This class is responsible for laying out text and preparing it for rendering.
 export class TextSystem {
 private:
@@ -108,25 +118,25 @@ public:
     return registeredFonts.back().get();
   }
 
-  // Example DPI, adjust to your target display if known, otherwise 96.0 is a safe default.
-  const float SYSTEM_DPI = 96.0f * 8;
+  constexpr const static double SYSTEM_DPI = 96.0;
+  constexpr static double inch = 72.0;
+  constexpr static double mult = SYSTEM_DPI / inch * 2;
 
-  void queueText(Font *font, const std::string &text, u32 pointSize, float x, float y,
+  void queueText(Font *font, const std::string &text, u32 pointSize, double x, double y,
                  const glm::vec4 &color) {
     if (!font || text.empty())
       return;
 
-    // 1. Convert font point size to a target pixel height for the EM square.
-    const float desiredPixelHeightForEm = static_cast<float>(pointSize) * (SYSTEM_DPI / 72.0f);
+    const double desiredPixelHeightForEm = static_cast<double>(pointSize) * mult;
 
     const auto &metrics = font->atlasData;
-    const float baselineY = y;
+    const double baselineY = y;
 
     auto &instanceVec = frameBatch[font];
-    float cursorX = x;
+    double cursorX = x;
 
-    // 2. Calculate the scale factor to convert from abstract font units to screen pixels.
-    const float fontUnitToPixelScale = desiredPixelHeightForEm / metrics.unitsPerEm;
+    const double fontUnitToPixelScale =
+        desiredPixelHeightForEm / static_cast<double>(metrics.unitsPerEm);
 
     for (char c : text) {
       auto it = metrics.glyphs.find(static_cast<u32>(c));
@@ -138,36 +148,31 @@ public:
 
       const auto &gi = it->second;
 
-      // 3. Calculate the final on-screen size of the glyph quad in pixels.
-      float scaledQuadWidth = gi.width * fontUnitToPixelScale;
-      float scaledQuadHeight = gi.height * fontUnitToPixelScale;
+      double scaledQuadWidth_d = static_cast<double>(gi.width) * fontUnitToPixelScale;
+      double scaledQuadHeight_d = static_cast<double>(gi.height) * fontUnitToPixelScale;
 
-      // 4. Calculate the on-screen position of the quad's top-left corner.
-      float xpos = cursorX + (gi.bearing_x * fontUnitToPixelScale);
-      float ypos = baselineY - (gi.bearing_y * fontUnitToPixelScale);
+      double xpos_d = cursorX + (static_cast<double>(gi.bearing_x) * fontUnitToPixelScale);
+      double ypos_d = baselineY - (static_cast<double>(gi.bearing_y) * fontUnitToPixelScale);
 
-      // 5. **CRITICAL FIX**: Calculate the correct pixel range for the shader.
-      // This converts the atlas pxRange into the on-screen pxRange.
-      // It considers the atlas's internal scale and the final font-to-pixel scale.
-      const float shaderPxRange =
-          font->atlasData.pxRange * font->atlasData.atlasScale * fontUnitToPixelScale;
+      double shaderPxRange = static_cast<double>(metrics.pxRange * fontUnitToPixelScale);
+      // double shaderPxRange =
+      //     static_cast<double>(metrics.pxRange) * (fontUnitToPixelScale / metrics.atlasScale);
 
       instanceVec.emplace_back(TextInstanceData{
-          .screenPos = {xpos, ypos},
-          .size = {scaledQuadWidth, scaledQuadHeight},
+          .screenPos = {static_cast<float>(xpos_d), static_cast<float>(ypos_d)},
+          .size = {static_cast<float>(scaledQuadWidth_d), static_cast<float>(scaledQuadHeight_d)},
           .uvTopLeft = {gi.uv_x0, gi.uv_y0},
           .uvBottomRight = {gi.uv_x1, gi.uv_y1},
           .color = color,
-          .pxRange = shaderPxRange,
+          .pxRange = static_cast<float>(shaderPxRange),
       });
 
-      // 6. Advance the cursor for the next character.
-      cursorX += gi.advance * fontUnitToPixelScale;
+      cursorX += static_cast<double>(gi.advance) * fontUnitToPixelScale;
     }
   }
 
   void prepareBatches(RenderQueue &queue, const VulkanPipeline &textPipeline, u32 frameIndex,
-                      vk::Extent2D windowSize, float sdf_weight, i32 antiAliasingToggle) {
+                      vk::Extent2D windowSize, TextToggles textToggles) {
     if (frameBatch.empty())
       return;
 
@@ -203,8 +208,7 @@ public:
 
       TextPushConstants2D pc;
       pc.projection = ortho;
-      pc.sdf_weight = sdf_weight;
-      pc.antiAliasingToggle = antiAliasingToggle;
+      pc.textToggles = textToggles;
 
       batch.pushConstantSize = sizeof(TextPushConstants2D);
       batch.pushConstantStages =

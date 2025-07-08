@@ -1,9 +1,13 @@
 struct TextPushConstants2D {
     float4x4 projection; // 64 bytes
     float sdf_weight;
-    uint anti_aliasing_enabled; // 4 bytes. Use uint for boolean to ensure consistent size across platforms.
-    float _padding[14];     // 14 floats * 4 bytes/float = 56 bytes
-                            // Total size: 64 + 4 + 4 + 56 = 128 bytes
+    float pxRangeDirectAdditive;
+    uint anti_aliasing_mode; // Changed name for clarity and multiple modes
+    float innerAADepth;
+    float outerAADepth;
+    uint num_stages; // New: Number of discrete opacity stages (e.g., 3 for 0, 0.5, 1)
+    uint rounding_direction; // New: 0=down, 1=up, 2=nearest
+    float _padding[9];
 };
 
 // This matches the simple TextQuadVertex format

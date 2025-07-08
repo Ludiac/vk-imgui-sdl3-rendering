@@ -43,7 +43,7 @@ export struct GltfMeshData {
 // Structure to hold data for a GLTF node
 export struct GltfNodeData {
   std::string name;
-  glm::mat4 transform{1.0f};
+  glm::mat4 transform{1.0};
   int meshIndex = -1;
   std::vector<int> childrenIndices;
   int parentIndex = -1;
@@ -78,8 +78,9 @@ template <typename T_Component, int N_Components>
 [[nodiscard]] std::expected<std::vector<glm::vec<N_Components, T_Component, glm::defaultp>>,
                             std::string>
 getAccessorData(const gltfm::Model &model, int accessorIndex) {
-  if (accessorIndex < 0 || static_cast<size_t>(accessorIndex) >= model.accessors.size())
+  if (accessorIndex < 0 || static_cast<size_t>(accessorIndex) >= model.accessors.size()) {
     return std::unexpected("Accessor index out of bounds.");
+  }
   const gltfm::Accessor &accessor = model.accessors[accessorIndex];
   const gltfm::BufferView &bufferView = model.bufferViews[accessor.bufferView];
   const gltfm::Buffer &buffer = model.buffers[bufferView.buffer];
@@ -89,12 +90,14 @@ getAccessorData(const gltfm::Model &model, int accessorIndex) {
   size_t componentSize = gltfm::GetComponentSizeInBytes(accessor.componentType);
   size_t numComponentsPerElement = gltfm::GetNumComponentsInType(accessor.type);
 
-  if (numComponentsPerElement != N_Components)
+  if (numComponentsPerElement != N_Components) {
     return std::unexpected("Accessor component count mismatch.");
+  }
 
   size_t stride = accessor.ByteStride(bufferView);
-  if (stride == 0)
+  if (stride == 0) {
     stride = componentSize * numComponentsPerElement;
+  }
 
   for (size_t i = 0; i < accessor.count; ++i) {
     const unsigned char *elementData = bufferData + (i * stride);
@@ -116,19 +119,22 @@ getAccessorData(const gltfm::Model &model, int accessorIndex) {
 
 [[nodiscard]] std::expected<std::vector<u32>, std::string>
 getIndexAccessorData(const gltfm::Model &model, int accessorIndex) {
-  if (accessorIndex < 0 || static_cast<size_t>(accessorIndex) >= model.accessors.size())
+  if (accessorIndex < 0 || static_cast<size_t>(accessorIndex) >= model.accessors.size()) {
     return std::unexpected("Index accessor index out of bounds.");
+  }
   const gltfm::Accessor &accessor = model.accessors[accessorIndex];
-  if (accessor.type != gltfm::TYPE_SCALAR)
+  if (accessor.type != gltfm::TYPE_SCALAR) {
     return std::unexpected("Index accessor is not scalar.");
+  }
   const gltfm::BufferView &bufferView = model.bufferViews[accessor.bufferView];
   const gltfm::Buffer &buffer = model.buffers[bufferView.buffer];
   const unsigned char *bufferData =
       buffer.data.data() + bufferView.byteOffset + accessor.byteOffset;
   std::vector<u32> indices(accessor.count);
   size_t stride = accessor.ByteStride(bufferView);
-  if (stride == 0)
+  if (stride == 0) {
     stride = gltfm::GetComponentSizeInBytes(accessor.componentType);
+  }
 
   for (size_t i = 0; i < accessor.count; ++i) {
     const unsigned char *elementData = bufferData + (i * stride);
@@ -156,34 +162,34 @@ void generateTangents(std::vector<Vertex> &vertices, const std::vector<u32> &ind
     return;
   }
 
-  std::vector<glm::vec3> temp_tangents(vertices.size(), glm::vec3(0.0f));
-  std::vector<glm::vec3> temp_bitangents(vertices.size(), glm::vec3(0.0f));
+  std::vector<glm::vec3> temp_tangents(vertices.size(), glm::vec3(0.0));
+  std::vector<glm::vec3> temp_bitangents(vertices.size(), glm::vec3(0.0));
 
   for (size_t i = 0; i < indices.size(); i += 3) {
-    Vertex &v0 = vertices[indices[i + 0]];
-    Vertex &v1 = vertices[indices[i + 1]];
-    Vertex &v2 = vertices[indices[i + 2]];
+    Vertex &vertex0 = vertices[indices[i + 0]];
+    Vertex &vertex1 = vertices[indices[i + 1]];
+    Vertex &vertex2 = vertices[indices[i + 2]];
 
-    glm::vec3 edge1 = v1.pos - v0.pos;
-    glm::vec3 edge2 = v2.pos - v0.pos;
+    glm::vec3 edge1 = vertex1.pos - vertex0.pos;
+    glm::vec3 edge2 = vertex2.pos - vertex0.pos;
 
-    glm::vec2 deltaUV1 = v1.uv - v0.uv;
-    glm::vec2 deltaUV2 = v2.uv - v0.uv;
+    glm::vec2 deltaUV1 = vertex1.uv - vertex0.uv;
+    glm::vec2 deltaUV2 = vertex2.uv - vertex0.uv;
 
-    float f = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
-    if (std::isinf(f) || std::isnan(f)) {
+    float factor = 1.0 / (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
+    if (std::isinf(factor) || std::isnan(factor)) {
       continue;
     }
 
     glm::vec3 tangent;
-    tangent.x = f * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x);
-    tangent.y = f * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y);
-    tangent.z = f * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z);
+    tangent.x = factor * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x);
+    tangent.y = factor * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y);
+    tangent.z = factor * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z);
 
     glm::vec3 bitangent;
-    bitangent.x = f * (-deltaUV2.x * edge1.x + deltaUV1.x * edge2.x);
-    bitangent.y = f * (-deltaUV2.x * edge1.y + deltaUV1.x * edge2.y);
-    bitangent.z = f * (-deltaUV2.x * edge1.z + deltaUV1.x * edge2.z);
+    bitangent.x = factor * (-deltaUV2.x * edge1.x + deltaUV1.x * edge2.x);
+    bitangent.y = factor * (-deltaUV2.x * edge1.y + deltaUV1.x * edge2.y);
+    bitangent.z = factor * (-deltaUV2.x * edge1.z + deltaUV1.x * edge2.z);
 
     temp_tangents[indices[i + 0]] += tangent;
     temp_tangents[indices[i + 1]] += tangent;
@@ -196,13 +202,13 @@ void generateTangents(std::vector<Vertex> &vertices, const std::vector<u32> &ind
 
   // MODIFIED: More robust finalization of tangents
   for (size_t i = 0; i < vertices.size(); ++i) {
-    Vertex &v = vertices[i];
-    const glm::vec3 &n = v.normal;
+    Vertex &currentVertex = vertices[i];
+    const glm::vec3 &normal = currentVertex.normal;
     const glm::vec3 &t_accum = temp_tangents[i];
     const glm::vec3 &b_accum = temp_bitangents[i];
 
     // Gram-Schmidt orthogonalize: T' = normalize(T - (T . N) * N)
-    glm::vec3 tangent = t_accum - n * glm::dot(n, t_accum);
+    // glm::vec3 tangent = t_accum - normal * glm::dot(normal, t_accum);
 
     // Check for degenerate cases (tangent parallel to normal)
     // if (glm::length2(tangent) > 1e-6f) { // Use length squared for efficiency and robustness
@@ -216,9 +222,9 @@ void generateTangents(std::vector<Vertex> &vertices, const std::vector<u32> &ind
     //   // Create an arbitrary but valid tangent.
     //   // This is a common technique using the cross product to find a perpendicular vector.
     glm::vec3 axis =
-        (std::abs(n.x) > std::abs(n.z)) ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0);
-    glm::vec3 fallback_t = glm::normalize(glm::cross(n, axis));
-    v.tangent = glm::vec4(fallback_t, 1.0f);
+        (std::abs(normal.x) > std::abs(normal.z)) ? glm::vec3(0.0, 1.0, 0.0) : glm::vec3(1.0, 0.0, 0.0);
+    glm::vec3 fallback_t = glm::normalize(glm::cross(normal, axis));
+    currentVertex.tangent = glm::vec4(fallback_t, 1.0);
     // }
   }
 }
@@ -228,7 +234,8 @@ export [[nodiscard]] std::expected<LoadedGltfScene, std::string>
 loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
   gltfm::Model model;
   gltfm::TinyGLTF loader;
-  std::string err, warn;
+  std::string err;
+  std::string warn;
   LoadedGltfScene loadedScene;
 
   bool ret;
@@ -238,20 +245,29 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
     ret = loader.LoadASCIIFromFile(&model, &err, &warn, filePath);
   }
 
-  if (!warn.empty())
+  if (!warn.empty()) {
     std::println("TinyGLTF Warning for '{}': {}", filePath, warn);
-  if (!err.empty())
+  }
+  if (!err.empty()) {
     return std::unexpected("TinyGLTF Error for '" + filePath + "': " + err);
-  if (!ret)
+  }
+  if (!ret) {
     return std::unexpected("Failed to parse GLTF file: " + filePath);
+  }
 
   // --- 0. Load Images ---
   for (size_t i = 0; i < model.images.size(); ++i) {
     const auto &gltfImage = model.images[i];
     GltfImageData imageData;
-    imageData.name = gltfImage.name.empty()
-                         ? (gltfImage.uri.empty() ? "Image_" + std::to_string(i) : gltfImage.uri)
-                         : gltfImage.name;
+    if (gltfImage.name.empty()) {
+        if (gltfImage.uri.empty()) {
+            imageData.name = "Image_" + std::to_string(i);
+        } else {
+            imageData.name = gltfImage.uri;
+        }
+    } else {
+        imageData.name = gltfImage.name;
+    }
 
     if (!gltfImage.uri.empty() && gltfImage.bufferView == -1) { // External image
       std::string imagePath = baseDir.empty() ? gltfImage.uri : baseDir + "/" + gltfImage.uri;
@@ -269,8 +285,8 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
     } else if (gltfImage.bufferView >= 0) { // Embedded image
       const auto &bufferView = model.bufferViews[gltfImage.bufferView];
       const auto &buffer = model.buffers[bufferView.buffer];
-      const unsigned char *data_ptr = buffer.data.data() + bufferView.byteOffset;
-      size_t data_len = bufferView.byteLength;
+      // const unsigned char *data_ptr = buffer.data.data() + bufferView.byteOffset;
+      // size_t data_len = bufferView.byteLength;
 
       if (!gltfImage.image.empty()) {
         imageData.pixels = gltfImage.image;
@@ -306,47 +322,55 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
 
       if (gltfPrimitive.indices >= 0) {
         auto indicesResult = GltfLoaderHelpers::getIndexAccessorData(model, gltfPrimitive.indices);
-        if (indicesResult)
+        if (indicesResult) {
           primitiveData.indices = std::move(*indicesResult);
-        else
+        } else {
           return std::unexpected("Indices load fail: " + indicesResult.error());
-      } else
+        }
+      } else {
         return std::unexpected("Non-indexed primitive.");
+      }
 
-      std::vector<glm::vec3> positions, normals;
+      std::vector<glm::vec3> positions;
+      std::vector<glm::vec3> normals;
       std::vector<glm::vec2> uvs;
       std::vector<glm::vec4> tangents; // To store loaded tangents
 
-      if (auto it = gltfPrimitive.attributes.find("POSITION");
-          it != gltfPrimitive.attributes.end()) {
-        auto res = GltfLoaderHelpers::getAccessorData<float, 3>(model, it->second);
-        if (res)
+      if (auto positionAttributeIt = gltfPrimitive.attributes.find("POSITION");
+          positionAttributeIt != gltfPrimitive.attributes.end()) {
+        auto res = GltfLoaderHelpers::getAccessorData<float, 3>(model, positionAttributeIt->second);
+        if (res) {
           positions = std::move(*res);
-        else
+        } else {
           return std::unexpected("POSITION: " + res.error());
-      } else
+        }
+      } else {
         return std::unexpected("No POSITION attribute.");
-
-      if (auto it = gltfPrimitive.attributes.find("NORMAL"); it != gltfPrimitive.attributes.end()) {
-        auto res = GltfLoaderHelpers::getAccessorData<float, 3>(model, it->second);
-        if (res)
-          normals = std::move(*res);
-        else
-          std::println("Warning: Failed to load NORMAL for {}.", meshData.name);
       }
-      if (auto it = gltfPrimitive.attributes.find("TEXCOORD_0");
-          it != gltfPrimitive.attributes.end()) {
-        auto res = GltfLoaderHelpers::getAccessorData<float, 2>(model, it->second);
-        if (res)
+
+      if (auto normalAttributeIt = gltfPrimitive.attributes.find("NORMAL");
+          normalAttributeIt != gltfPrimitive.attributes.end()) {
+        auto res = GltfLoaderHelpers::getAccessorData<float, 3>(model, normalAttributeIt->second);
+        if (res) {
+          normals = std::move(*res);
+        } else {
+          std::println("Warning: Failed to load NORMAL for {}.", meshData.name);
+        }
+      }
+      if (auto texCoordAttributeIt = gltfPrimitive.attributes.find("TEXCOORD_0");
+          texCoordAttributeIt != gltfPrimitive.attributes.end()) {
+        auto res = GltfLoaderHelpers::getAccessorData<float, 2>(model, texCoordAttributeIt->second);
+        if (res) {
           uvs = std::move(*res);
-        else
+        } else {
           std::println("Warning: Failed to load TEXCOORD_0 for {}.", meshData.name);
+        }
       }
 
       bool hasTangents = false;
-      if (auto it = gltfPrimitive.attributes.find("TANGENT");
-          it != gltfPrimitive.attributes.end()) {
-        auto res = GltfLoaderHelpers::getAccessorData<float, 4>(model, it->second);
+      if (auto tangentAttributeIt = gltfPrimitive.attributes.find("TANGENT");
+          tangentAttributeIt != gltfPrimitive.attributes.end()) {
+        auto res = GltfLoaderHelpers::getAccessorData<float, 4>(model, tangentAttributeIt->second);
         if (res) {
           tangents = std::move(*res);
           hasTangents = true;
@@ -375,12 +399,11 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
         const auto &gltfMaterial = model.materials[gltfPrimitive.material];
         const auto &pbr = gltfMaterial.pbrMetallicRoughness;
 
-        primitiveData.material.normalScale = gltfMaterial.normalTexture.scale;
+        primitiveData.material.normalScale = static_cast<float>(gltfMaterial.normalTexture.scale);
         primitiveData.material.baseColorFactor = glm::make_vec4(pbr.baseColorFactor.data());
-        primitiveData.material.metallicFactor = static_cast<float>(pbr.metallicFactor);
-        primitiveData.material.roughnessFactor = static_cast<float>(pbr.roughnessFactor);
-        primitiveData.material.occlusionStrength =
-            static_cast<float>(gltfMaterial.occlusionTexture.strength);
+        primitiveData.material.metallicFactor = pbr.metallicFactor;
+        primitiveData.material.roughnessFactor = pbr.roughnessFactor;
+        primitiveData.material.occlusionStrength = gltfMaterial.occlusionTexture.strength;
         primitiveData.material.emissiveFactor = glm::make_vec3(gltfMaterial.emissiveFactor.data());
 
         auto get_image_index = [&](int texture_index) {
@@ -418,32 +441,36 @@ loadGltfFile(const std::string &filePath, const std::string &baseDir = "") {
     if (!gltfNode.matrix.empty()) {
       nodeData.transform = glm::make_mat4(gltfNode.matrix.data());
     } else {
-      glm::mat4 T = glm::mat4(1.f), R = glm::mat4(1.f), S = glm::mat4(1.f);
+      auto translationMatrix = glm::mat4(1.0);
+      auto rotationMatrix = glm::mat4(1.0);
+      auto scaleMatrix = glm::mat4(1.0);
       if (!gltfNode.translation.empty()) {
-        T = glm::translate(T, glm::vec3(gltfNode.translation[0], gltfNode.translation[1],
+        translationMatrix = glm::translate(translationMatrix, glm::vec3(gltfNode.translation[0], gltfNode.translation[1],
                                         gltfNode.translation[2]));
       }
       if (!gltfNode.rotation.empty()) {
-        R = glm::mat4_cast(glm::quat(gltfNode.rotation[3], gltfNode.rotation[0],
-                                     gltfNode.rotation[1], gltfNode.rotation[2]));
+        rotationMatrix = glm::mat4_cast(glm::quat(static_cast<float>(gltfNode.rotation[3]), static_cast<float>(gltfNode.rotation[0]),
+                                     static_cast<float>(gltfNode.rotation[1]), static_cast<float>(gltfNode.rotation[2])));
       }
       if (!gltfNode.scale.empty()) {
-        S = glm::scale(S, glm::vec3(gltfNode.scale[0], gltfNode.scale[1], gltfNode.scale[2]));
+        scaleMatrix = glm::scale(scaleMatrix, glm::vec3(gltfNode.scale[0], gltfNode.scale[1], gltfNode.scale[2]));
       }
-      nodeData.transform = T * R * S;
+      nodeData.transform = translationMatrix * rotationMatrix * scaleMatrix;
     }
 
     for (int childIdx : gltfNode.children) {
       nodeData.childrenIndices.push_back(childIdx);
-      if (childIdx >= 0 && static_cast<size_t>(childIdx) < loadedScene.nodes.size())
+      if (childIdx >= 0 && static_cast<size_t>(childIdx) < loadedScene.nodes.size()) {
         loadedScene.nodes[childIdx].parentIndex = static_cast<int>(i);
+      }
     }
   }
 
   // 3. Identify Root Nodes
   if (model.defaultScene >= 0 && static_cast<size_t>(model.defaultScene) < model.scenes.size()) {
-    for (int rootNodeIdx : model.scenes[model.defaultScene].nodes)
+    for (int rootNodeIdx : model.scenes[model.defaultScene].nodes) {
       loadedScene.rootNodeIndices.push_back(rootNodeIdx);
+    }
   } else if (!model.nodes.empty()) {
     for (size_t i = 0; i < loadedScene.nodes.size(); ++i) {
       if (loadedScene.nodes[i].parentIndex == -1) {

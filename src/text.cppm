@@ -86,10 +86,22 @@ createFontAtlasMSDF(const std::string &fontPath, int pixelHeight) {
   }
   ScopeGuard fontGuard([&]() { msdfgen::destroyFont(font); });
 
+  // Get font metrics
+  msdfgen::FontMetrics metrics;
+  if (!msdfgen::getFontMetrics(metrics, font, msdfgen::FONT_SCALING_NONE)) {
+    return std::unexpected("Failed to get font metrics");
+  }
+
+  atlasData.unitsPerEm = metrics.emSize;
+  atlasData.ascender = metrics.ascenderY;
+  atlasData.descender = metrics.descenderY;
+  atlasData.lineHeight = metrics.lineHeight;
+
   // --- Configuration ---
   const double angleThreshold = 3.0;
   const double miterLimit = 1.0;
-  atlasData.pxRange = 8.0; // The distance field range in atlas pixels.
+  atlasData.pxRange = atlasData.unitsPerEm / 128; // The distance field range in atlas pixels.
+  // atlasData.pxRange = 2.0;
 
   const std::string fullCharset =
       " !\"#$%&'()*+,-./"
@@ -98,13 +110,14 @@ createFontAtlasMSDF(const std::string &fontPath, int pixelHeight) {
   if (currentCharset.empty()) {
     currentCharset = fullCharset;
   }
+  currentCharset = fullCharset;
 
   std::vector<msdf_atlas::GlyphGeometry> glyphs;
 
   for (char c_char : currentCharset) {
     msdfgen::unicode_t c = static_cast<msdfgen::unicode_t>(c_char);
     msdf_atlas::GlyphGeometry glyphGeometry;
-    const double geometryScale = 1.0 / 8.0; // This is a typical value, adjust if needed
+    const double geometryScale = 0.5; // This is a typical value, adjust if needed
     if (!glyphGeometry.load(font, geometryScale, c, true)) {
       std::cerr << "Warning: Could not load glyph geometry for character '" << c_char << "'\n";
       continue;
@@ -138,6 +151,8 @@ createFontAtlasMSDF(const std::string &fontPath, int pixelHeight) {
   // Or uncomment the next line to force a specific pixel size for the EM square
   // packer.setScale(static_cast<double>(pixelHeight));
   packer.setMiterLimit(miterLimit);
+  packer.setOuterUnitPadding(32);
+  // packer.setScale(1.0);
   packer.pack(glyphs.data(), glyphs.size());
 
   int width = 0, height = 0;
@@ -171,24 +186,13 @@ createFontAtlasMSDF(const std::string &fontPath, int pixelHeight) {
       generator(width, height);
 
   generator.setAttributes(attributes);
-  generator.setThreadCount(4);
+  generator.setThreadCount(8);
   std::println("DEBUG: Generating MTSDF atlas bitmap...");
   generator.generate(glyphs.data(), glyphs.size());
   std::println("DEBUG: Atlas bitmap generation complete.");
 
   msdfgen::BitmapConstRef<msdf_atlas::byte, 4> bitmap = generator.atlasStorage();
   atlasData.atlasBitmap.assign(bitmap.pixels, bitmap.pixels + bitmap.width * bitmap.height * 4);
-
-  // Get font metrics
-  msdfgen::FontMetrics metrics;
-  if (!msdfgen::getFontMetrics(metrics, font, msdfgen::FONT_SCALING_NONE)) {
-    return std::unexpected("Failed to get font metrics");
-  }
-
-  atlasData.unitsPerEm = metrics.emSize;
-  atlasData.ascender = metrics.ascenderY;
-  atlasData.descender = metrics.descenderY;
-  atlasData.lineHeight = metrics.lineHeight;
 
   // --- Store Glyph Metrics ---
   std::println("DEBUG: Glyph metrics stored. Total glyphs: {}", glyphs.size());

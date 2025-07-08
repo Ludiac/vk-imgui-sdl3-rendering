@@ -28,8 +28,6 @@ export struct TextQuadVertex {
   glm::vec2 uv;
 };
 
-// This struct defines the unique data for each character instance.
-// It will be sent to the shader via a storage buffer.
 export struct TextInstanceData {
   glm::vec2 screenPos; // Top-left position of the quad
   glm::vec2 size;      // width and height of the quad
@@ -40,39 +38,21 @@ export struct TextInstanceData {
   float pxRange;
 };
 
-export struct Sheet {
-  glm::vec2 position{0.0f};                          // Top-left corner in screen pixels
-  glm::vec2 size{100.0f, 100.0f};                    // Width and height in pixels
-  glm::vec4 backgroundColor{0.1f, 0.1f, 0.1f, 0.8f}; // RGBA for the sheet's background
-
-  // Margins (padding) from the edges of the sheet
-  float marginTop = 5.0f;
-  float marginRight = 5.0f;
-  float marginBottom = 5.0f;
-  float marginLeft = 5.0f;
-};
-
-// Represents a block of text to be rendered within a Sheet.
-export struct TextBlock {
-  std::string text;
-  glm::vec4 color{1.0f, 1.0f, 1.0f, 1.0f}; // Default to white text
-  float fontSize = 48.0f;                  // This is illustrative; actual size is from FontAtlas
-  // Future properties could include alignment (left, center, right)
-};
-
 // The vertex format for our static unit quad.
 struct UIQuadVertex {
   glm::vec2 pos;
   glm::vec2 uv;
 };
 
-// Data for a single UI element instance.
-// This gets sent to the GPU via an SSBO.
-struct UIInstanceData {
-  glm::vec2 screenPos;
-  glm::vec2 scale;
+export struct Quad {
+  glm::vec2 position;
+  glm::vec2 size;
   glm::vec4 color;
   float z_layer;
+};
+
+struct UIInstanceData {
+  Quad quad;
   float _padding[3]; // Explicit padding to fill up to a 16-byte boundary or for future use
   // Future SDF parameters:
   float cornerRadius;

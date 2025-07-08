@@ -1,16 +1,25 @@
+#define AA_NONE 0
+#define AA_SMOOTHSTEP 1
+#define AA_LINEAR_CLAMP 2
+#define AA_STAGES 3
+
 struct TextPushConstants2D {
-    float4x4 projection; // 64 bytes
+    float4x4 projection;
     float sdf_weight;
-    uint anti_aliasing_enabled; // 4 bytes. Use uint for boolean to ensure consistent size across platforms.
-    float _padding[14];     // 14 floats * 4 bytes/float = 56 bytes
-                            // Total size: 64 + 4 + 4 + 56 = 128 bytes
+    float pxRangeDirectAdditive;
+    uint anti_aliasing_mode;
+    float start_fade_px;
+    float end_fade_px;
+    uint num_stages;
+    uint rounding_direction;
+    float _padding[9];
 };
 
 struct VertexToFragment {
     float4 position : SV_Position;
-    float2 uv       : TEXCOORD0;
-    float4 color    : COLOR0;
-    float  pxRange  : TEXCOORD1;
+    float2 uv : TEXCOORD0;
+    float4 color : COLOR0;
+    float pxRange : TEXCOORD1;
 };
 
 struct FragmentOutput {
@@ -23,7 +32,7 @@ TextPushConstants2D push_constants;
 [[vk::binding(0, 1)]]
 Sampler2D fontAtlas;
 
-// Function to find the median of three values, used for MSDF.
+// Finds the median of three values, used for Multi-channel Signed Distance Fields.
 float median(float r, float g, float b) {
     return max(min(r, g), min(max(r, g), b));
 }
@@ -31,39 +40,82 @@ float median(float r, float g, float b) {
 FragmentOutput main(VertexToFragment input) {
     FragmentOutput output;
 
-    // 1. Sample the 4-channel MTSDF texture
+    // Sample the 4-channel MTSDF texture (MSDF in RGB, true SDF in Alpha).
     float4 texSample = fontAtlas.Sample(input.uv);
 
-    // 2. Get the signed distance from the MSDF (in RGB) and the true SDF (in Alpha)
     // The texture values are in the [0, 1] range, where 0.5 is the contour edge.
     float sd = median(texSample.r, texSample.g, texSample.b);
     float sdf = texSample.a;
 
-    // 3. Mix the MSDF and SDF values. This uses the MSDF by default but
-    // falls back to the true SDF in areas where the MSDF is not well-defined (e.g., inside the glyph).
-    // This gives the best of both: sharp corners from MSDF and solid fills from SDF.
+    // Mix the MSDF and SDF values based on a weight.
     float msd = lerp(sd, sdf, push_constants.sdf_weight);
 
-    // 4. Convert the combined distance field value to screen-space pixel distance.
-    float screenPxDistance = input.pxRange * (msd - 0.5);
+    // Convert the distance field value to screen-space pixel distance.
+    float screenPxDistance = (input.pxRange + push_constants.pxRangeDirectAdditive) * (msd - 0.5);
 
     float opacity;
 
-    // Anti-aliasing toggling
-    if (push_constants.anti_aliasing_enabled == 1) {
-        // 5. Calculate the screen-space gradient of the distance field for anti-aliasing.
-        // This determines how "blurry" the edge should be.
-        float screenPxGradient = fwidth(screenPxDistance);
-
-        // 6. Compute anti-aliased opacity using a smooth step.
-        // This creates a smooth transition from transparent to opaque over the width of one pixel.
-        opacity = smoothstep(-screenPxGradient, screenPxGradient, screenPxDistance);
-    } else {
-        // No anti-aliasing: sharp cutoff
-        opacity = step(0.0, screenPxDistance); // If screenPxDistance > 0, opacity is 1, else 0.
+    // Select anti-aliasing method.
+    switch (push_constants.anti_aliasing_mode) {
+        case AA_SMOOTHSTEP: {
+            // High-quality anti-aliasing using smoothstep over the screen-space gradient.
+            float screenPxGradient = fwidth(screenPxDistance);
+            opacity = smoothstep(-screenPxGradient, screenPxGradient, screenPxDistance);
+            break;
+        }
+        case AA_LINEAR_CLAMP: {
+            // A linear transition between two pixel boundaries.
+            float start_fade = -push_constants.start_fade_px;
+            float end_fade = push_constants.end_fade_px;
+            float unclamped_opacity = (screenPxDistance - start_fade) / (end_fade - start_fade);
+            opacity = clamp(unclamped_opacity, 0.0, 1.0);
+            break;
+        }
+        case AA_STAGES: {
+            // A simple staged opacity, useful for debugging or specific effects.
+            // The full implementation for this is not yet complete.
+            opacity = clamp(screenPxDistance + 0.5, 0.0, 1.0);
+            break;
+        }
+        case AA_NONE:
+        default: {
+            // Sharp, aliased cutoff at the contour edge.
+            opacity = step(0.0, screenPxDistance);
+            // Staged anti-aliasing with configurable number of stages and rounding direction.                                                                                                               │
+            // Ensures that the number of stages is at least 1 to prevent division by zero.                                                                                                                  │
+            // uint num_stages = max(1u, push_constants.num_stages);                                                                                                                                         │
+            // float step_value;                                                                                                                                                                             │
+            //                                                                                                                                                                                               │
+            // if (num_stages == 1) {                                                                                                                                                                        │
+            //     // If only one stage, it's effectively a sharp cutoff (binary opacity: 0 or 1).                                                                                                           │
+            //     opacity = step(0.0, screenPxDistance);                                                                                                                                                    │
+            // } else {                                                                                                                                                                                      │
+            //     float baseOpacity = clamp(screenPxDistance + 0.5, 0.0, 1.0);                                                                                                                              │
+            //     step_value = 1.0 / (float)(num_stages - 1);                                                                                                                                               │
+            //                                                                                                                                                                                               │
+            //     float target_index_float = baseOpacity / step_value;                                                                                                                                      │
+            //     float rounded_index;                                                                                                                                                                      │
+            //                                                                                                                                                                                               │
+            //     // Apply rounding based on the specified direction.                                                                                                                                       │
+            //     if (push_constants.rounding_direction == 0u) { // Round down (floor)                                                                                                                      │
+            //         rounded_index = floor(target_index_float);                                                                                                                                            │
+            //     } else if (push_constants.rounding_direction == 1u) { // Round up (ceil)                                                                                                                  │
+            //         rounded_index = ceil(target_index_float);                                                                                                                                             │
+            //     } else { // Default or 2u: Round to nearest (round)                                                                                                                                       │
+            //         rounded_index = round(target_index_float);                                                                                                                                            │
+            //     }                                                                                                                                                                                         │
+            //                                                                                                                                                                                               │
+            //     // Clamp the rounded index to ensure it stays within the valid stage range [0, num_stages - 1].                                                                                           │
+            //     rounded_index = clamp(rounded_index, 0.0, (float)(num_stages - 1));                                                                                                                       │
+            //                                                                                                                                                                                               │
+            //     // Calculate the final quantized opacity value.                                                                                                                                           │
+            //     opacity = rounded_index * step_value;                                                                                                                                                     │
+            // }        
+            break;
+        }
     }
 
-    // 7. Apply the final color with the computed opacity.
+    // Apply the final color with the computed opacity.
     output.color = float4(input.color.rgb, input.color.a * opacity);
 
     return output;

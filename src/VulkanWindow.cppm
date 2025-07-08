@@ -60,8 +60,9 @@ vk::Format findSupportedFormat(const vk::raii::PhysicalDevice &physicalDevice,
     vk::FormatProperties props = physicalDevice.getFormatProperties(format);
     if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) {
       return format;
-    } else if (tiling == vk::ImageTiling::eOptimal &&
-               (props.optimalTilingFeatures & features) == features) {
+    }
+    if (tiling == vk::ImageTiling::eOptimal &&
+        (props.optimalTilingFeatures & features) == features) {
       return format;
     }
   }
@@ -85,7 +86,8 @@ vk::SurfaceFormatKHR selectSurfaceFormat(const vk::raii::PhysicalDevice &physica
 
   if (avail_formats.size() == 1) {
     return avail_formats[0].format == vk::Format::eUndefined
-               ? vk::SurfaceFormatKHR{request_formats.front(), request_color_space}
+               ? vk::SurfaceFormatKHR{.format = request_formats.front(),
+                                      .colorSpace = request_color_space}
                : avail_formats[0];
   }
 
@@ -120,9 +122,7 @@ vk::PresentModeKHR selectPresentMode(const vk::raii::PhysicalDevice &physical_de
 
 [[nodiscard]] std::expected<void, std::string>
 createWindowCommandBuffers(const VulkanDevice &device, Window &wd) {
-  for (u32 i = 0; i < wd.Frames.size(); i++) {
-    decltype(auto) fd = wd.Frames[i];
-
+  for (decltype(auto) fd : wd.Frames) {
     if (auto commandPool = device.logical().createCommandPool({
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
             .queueFamilyIndex = device.queueFamily_,
@@ -195,16 +195,17 @@ createDepthResources(VulkanDevice &vulkan_device, Window &wd, vk::Extent2D exten
     return std::unexpected("Failed to find suitable depth format.");
   }
 
-  vk::ImageCreateInfo imageCi{.imageType = vk::ImageType::e2D,
-                              .format = wd.depthFormat,
-                              .extent = vk::Extent3D{extent.width, extent.height, 1},
-                              .mipLevels = 1,
-                              .arrayLayers = 1,
-                              .samples = vk::SampleCountFlagBits::e1,
-                              .tiling = vk::ImageTiling::eOptimal,
-                              .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
-                              .sharingMode = vk::SharingMode::eExclusive,
-                              .initialLayout = vk::ImageLayout::eUndefined};
+  vk::ImageCreateInfo imageCi{
+      .imageType = vk::ImageType::e2D,
+      .format = wd.depthFormat,
+      .extent = vk::Extent3D{.width = extent.width, .height = extent.height, .depth = 1},
+      .mipLevels = 1,
+      .arrayLayers = 1,
+      .samples = vk::SampleCountFlagBits::e1,
+      .tiling = vk::ImageTiling::eOptimal,
+      .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment,
+      .sharingMode = vk::SharingMode::eExclusive,
+      .initialLayout = vk::ImageLayout::eUndefined};
 
   vma::AllocationCreateInfo imageAllocInfo{
       .usage = vma::MemoryUsage::eAutoPreferDevice // Depth buffers are best in device local memory

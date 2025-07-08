@@ -50,13 +50,10 @@ public:
 
   void beginFrame() { queuedInstances.clear(); }
 
-  void queueSheet(const Sheet &sheet, float z_layer) {
+  void queueQuad(Quad quad) {
     if (queuedInstances.size() >= maxQuadsPerFrame)
       return;
-    queuedInstances.emplace_back(UIInstanceData{.screenPos = sheet.position,
-                                                .scale = sheet.size,
-                                                .color = sheet.backgroundColor,
-                                                .z_layer = z_layer});
+    queuedInstances.emplace_back(UIInstanceData{.quad = quad});
   }
 
   // REPLACES the old `draw` method.

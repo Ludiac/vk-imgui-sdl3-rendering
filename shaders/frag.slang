@@ -47,7 +47,6 @@ struct SceneLightsUBO {
     float3     _pad; 
 };
 
-// NEW: UBO for shader toggles
 struct ShaderTogglesUBO {
     bool useNormalMapping;
     bool useOcclusion;
@@ -61,7 +60,7 @@ struct ShaderTogglesUBO {
 [[vk::binding(0, 0)]] ConstantBuffer<UniformBufferObject> ubo;
 [[vk::binding(1, 0)]] ConstantBuffer<Material> material;
 [[vk::binding(0, 1)]] ConstantBuffer<SceneLightsUBO> scene; 
-[[vk::binding(1, 1)]] ConstantBuffer<ShaderTogglesUBO> toggles; // NEW: set 1, binding 1
+[[vk::binding(1, 1)]] ConstantBuffer<ShaderTogglesUBO> toggles;
 
 
 // Samplers

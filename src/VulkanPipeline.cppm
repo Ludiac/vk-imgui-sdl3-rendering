@@ -87,79 +87,37 @@ export struct VulkanPipeline {
   [[nodiscard]] std::expected<void, std::string> createGraphicsPipeline(
       const vk::raii::Device &device, const vk::raii::PipelineCache &pipelineCache,
       std::vector<vk::PipelineShaderStageCreateInfo> shaderStages,
-      vk::PipelineVertexInputStateCreateInfo vertexInputInfo, // Pass this in now
+      vk::PipelineVertexInputStateCreateInfo vertexInputInfo,
       vk::PipelineInputAssemblyStateCreateInfo inputAssembly,
       const vk::raii::RenderPass &renderPass,
-      vk::PipelineColorBlendAttachmentState *colorBlendAttachmentOverride = nullptr, // NEW
-      vk::PipelineDepthStencilStateCreateInfo *depthStencilStateOverride = nullptr   // NEW
+      vk::PipelineColorBlendAttachmentState *colorBlendAttachmentOverride = nullptr,
+      vk::PipelineDepthStencilStateCreateInfo *depthStencilStateOverride = nullptr
       ) NOEXCEPT {
-    // vk::VertexInputBindingDescription bindingDescription{
-    //     .binding = 0,
-    //     .stride = sizeof(Vertex),
-    //     .inputRate = vk::VertexInputRate::eVertex,
-    // };
-
-    // std::array<vk::VertexInputAttributeDescription, 4> attributes = {{
-    //     {0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)},
-    //     {1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal)},
-    //     {2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, uv)},
-    //     {3, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(Vertex, tangent)},
-    // }};
-    //
-    // vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
-    //     .vertexBindingDescriptionCount = 1,
-    //     .pVertexBindingDescriptions = &bindingDescription,
-    //     .vertexAttributeDescriptionCount = static_cast<u32>(attributes.size()),
-    //     .pVertexAttributeDescriptions = attributes.data(),
-    // };
-
     vk::PipelineViewportStateCreateInfo viewportState{
         .viewportCount = 1,
         .scissorCount = 1,
     };
 
     vk::PipelineRasterizationStateCreateInfo rasterizer{
-        .depthClampEnable = false,        // Usually false
-        .rasterizerDiscardEnable = false, // Usually false
+        .depthClampEnable = false,
+        .rasterizerDiscardEnable = false,
         .polygonMode = vk::PolygonMode::eFill,
         .cullMode = vk::CullModeFlagBits::eBack,
         .frontFace = vk::FrontFace::eClockwise,
-
         .depthBiasEnable = false,
         .lineWidth = 1.0f,
     };
 
     vk::PipelineMultisampleStateCreateInfo multisampling{
-        .rasterizationSamples = vk::SampleCountFlagBits::e1, // No MSAA
+        .rasterizationSamples = vk::SampleCountFlagBits::e1,
         .sampleShadingEnable = false,
     };
-
-    // vk::PipelineDepthStencilStateCreateInfo depthStencilState{
-    //     .depthTestEnable = true,
-    //     .depthWriteEnable = true,
-    //     .depthCompareOp = vk::CompareOp::eLess,
-    //     .depthBoundsTestEnable = false,
-    //     .stencilTestEnable = false,
-    //
-    // };
 
     vk::PipelineDepthStencilStateCreateInfo defaultDepthStencilState{
         .depthTestEnable = true,
         .depthWriteEnable = true,
         .depthCompareOp = vk::CompareOp::eLess,
     };
-
-    // vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-    //     .blendEnable = false, // No blending for opaque objects initially
-    //     .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-    //                       vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
-    // };
-    //
-    // vk::PipelineColorBlendStateCreateInfo colorBlending{
-    //     .logicOpEnable = false,
-    //     .attachmentCount = 1,
-    //     .pAttachments = &colorBlendAttachment,
-    // };
 
     vk::PipelineColorBlendAttachmentState defaultColorBlendAttachment{
         .blendEnable = false,

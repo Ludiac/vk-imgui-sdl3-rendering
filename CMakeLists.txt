@@ -155,8 +155,10 @@ target_sources(AppModule
         src/text.cppm
         src/UISystem.cppm
         src/TextSystem.cppm
-        src/PieceTable.cppm
-        src/TextArea.cppm
+        # src/PieceTable.cppm
+        src/TextEditor.cppm
+        src/TextView.cppm
+        src/3DEngine.cppm
 
         src/ModelLoader.cppm
         src/types.cppm
