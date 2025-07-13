@@ -34,31 +34,24 @@ import :ThreeDEngine; // Import the new 3D engine module
 namespace {
 constexpr u32 MIN_IMAGE_COUNT = 2;
 
-void check_vk_result(VkResult err) {
+std::atomic<bool> g_imgui_fatal_error_flag{false};
+
+void check_vk_result_for_imgui(VkResult err) {
   if (err == VK_SUCCESS) {
     return;
   }
+
   std::string errMsg = "[vulkan] Error: VkResult = " + std::to_string(err);
   std::println("{}", errMsg);
-  if (err < 0) {
-    std::exit(1);
-  }
+  g_imgui_fatal_error_flag.store(true);
 }
 
-void check_vk_result_hpp(vk::Result err) {
-  if (err == vk::Result::eSuccess) {
-    return;
-  }
-  std::string errMsg = "[vulkan] Error: VkResult = " + vk::to_string(err);
-  std::print("{}", errMsg); // Keep console print
-  std::exit(0);
-}
 } // anonymous namespace
 
 export class App {
   VulkanInstance instance;
   VulkanDevice device{instance};
-  Window wd;
+  VulkanWindow wd;
   bool swapChainRebuild = false;
 
   // 3D Engine
@@ -68,8 +61,8 @@ export class App {
   VulkanPipeline textPipeline;
   VulkanPipeline uiPipeline;
   vk::raii::PipelineCache pipelineCache{nullptr};
-  std::unique_ptr<TextSystem> textSystem;
-  std::unique_ptr<UISystem> uiSystem;
+  TextSystem textSystem;
+  UISystem uiSystem;
 
   // Text Editor MVC Components
   TextEditor textEditor{"Lorem ipsum vulkan\n Lorem ipsum vulkan Lorem\n ipsum vulkan Lorem ipsum "
@@ -87,13 +80,19 @@ export class App {
   TextToggles textToggles;
 
 private:
-  void create2DGraphicsPipelines() {
-    auto textVertShader = createShaderModuleFromFile(device.logical(), "shaders/text_vert.spv");
-    auto textFragShader = createShaderModuleFromFile(device.logical(), "shaders/text_frag.spv");
-    if (!textVertShader || !textFragShader) {
-      std::println("Error loading text shaders.");
-      return;
-    }
+  // All initialization functions that can fail are changed to return a std::expected.
+  // This allows us to propagate errors up to the main `run` function without calling std::exit.
+  [[nodiscard]] std::expected<void, std::string> create2DGraphicsPipelines() {
+    auto textVertShaderResult =
+        createShaderModuleFromFile(device.logical(), "shaders/text_vert.spv");
+    if (!textVertShaderResult)
+      return std::unexpected(textVertShaderResult.error());
+    auto textFragShaderResult =
+        createShaderModuleFromFile(device.logical(), "shaders/text_frag.spv");
+    if (!textFragShaderResult)
+      return std::unexpected(textFragShaderResult.error());
+    auto textVertShader = std::move(*textVertShaderResult);
+    auto textFragShader = std::move(*textFragShaderResult);
 
     vk::raii::DescriptorSetLayout textSetLayout{nullptr};
     std::vector<vk::DescriptorSetLayoutBinding> textBindings = {
@@ -101,16 +100,23 @@ private:
          .descriptorType = vk::DescriptorType::eCombinedImageSampler,
          .descriptorCount = 1,
          .stageFlags = vk::ShaderStageFlagBits::eFragment}};
-    vk::DescriptorSetLayoutCreateInfo textLayoutInfo{.bindingCount = (u32)textBindings.size(),
-                                                     .pBindings = textBindings.data()};
-    textSetLayout = device.logical().createDescriptorSetLayout(textLayoutInfo).value();
+    vk::DescriptorSetLayoutCreateInfo textLayoutInfo{
+        .bindingCount = static_cast<u32>(textBindings.size()), .pBindings = textBindings.data()};
 
-    auto uiVertShader = createShaderModuleFromFile(device.logical(), "shaders/ui_vert.spv");
-    auto uiFragShader = createShaderModuleFromFile(device.logical(), "shaders/ui_frag.spv");
-    if (!uiVertShader || !uiFragShader) {
-      std::println("Error loading ui shaders.");
-      return;
-    }
+    auto textSetLayoutResult = device.logical().createDescriptorSetLayout(textLayoutInfo);
+    if (!textSetLayoutResult)
+      return std::unexpected("Failed to create text descriptor set layout.");
+
+    textSetLayout = std::move(textSetLayoutResult.value());
+
+    auto uiVertShaderResult = createShaderModuleFromFile(device.logical(), "shaders/ui_vert.spv");
+    if (!uiVertShaderResult)
+      return std::unexpected(uiVertShaderResult.error());
+    auto uiFragShaderResult = createShaderModuleFromFile(device.logical(), "shaders/ui_frag.spv");
+    if (!uiFragShaderResult)
+      return std::unexpected(uiFragShaderResult.error());
+    auto uiVertShader = std::move(*uiVertShaderResult);
+    auto uiFragShader = std::move(*uiFragShaderResult);
 
     vk::raii::DescriptorSetLayout instanceSetLayout{nullptr};
     std::vector<vk::DescriptorSetLayoutBinding> instanceBindings = {
@@ -121,7 +127,12 @@ private:
     vk::DescriptorSetLayoutCreateInfo instanceLayoutInfo{
         .bindingCount = static_cast<u32>(instanceBindings.size()),
         .pBindings = instanceBindings.data()};
-    instanceSetLayout = device.logical().createDescriptorSetLayout(instanceLayoutInfo).value();
+
+    auto instanceSetLayoutResult = device.logical().createDescriptorSetLayout(instanceLayoutInfo);
+    if (!instanceSetLayoutResult) {
+      return std::unexpected("Failed to create instance descriptor set layout.");
+    }
+    instanceSetLayout = std::move(instanceSetLayoutResult.value());
 
     vk::PushConstantRange textPushConstantRange{.stageFlags = vk::ShaderStageFlagBits::eVertex |
                                                               vk::ShaderStageFlagBits::eFragment,
@@ -131,8 +142,7 @@ private:
     auto textPipelineLayoutResult =
         textPipeline.createPipelineLayout(device.logical(), textLayouts, {textPushConstantRange});
     if (!textPipelineLayoutResult) {
-      std::println("{}", textPipelineLayoutResult.error());
-      std::exit(1);
+      return std::unexpected(textPipelineLayoutResult.error());
     }
 
     vk::PushConstantRange uiPushConstantRange{.stageFlags = vk::ShaderStageFlagBits::eVertex,
@@ -142,24 +152,15 @@ private:
     auto uiPipelineLayoutResult =
         uiPipeline.createPipelineLayout(device.logical(), uiLayouts, {uiPushConstantRange});
     if (!uiPipelineLayoutResult) {
-      std::println("{}", uiPipelineLayoutResult.error());
-      std::exit(1);
+      return std::unexpected(uiPipelineLayoutResult.error());
     }
 
     std::vector<vk::PipelineShaderStageCreateInfo> textShaderStages = {
-        {.stage = vk::ShaderStageFlagBits::eVertex,
-         .module = *textVertShader.value(),
-         .pName = "main"},
-        {.stage = vk::ShaderStageFlagBits::eFragment,
-         .module = *textFragShader.value(),
-         .pName = "main"}};
+        {.stage = vk::ShaderStageFlagBits::eVertex, .module = *textVertShader, .pName = "main"},
+        {.stage = vk::ShaderStageFlagBits::eFragment, .module = *textFragShader, .pName = "main"}};
     std::vector<vk::PipelineShaderStageCreateInfo> uiShaderStages = {
-        {.stage = vk::ShaderStageFlagBits::eVertex,
-         .module = *uiVertShader.value(),
-         .pName = "main"},
-        {.stage = vk::ShaderStageFlagBits::eFragment,
-         .module = *uiFragShader.value(),
-         .pName = "main"}};
+        {.stage = vk::ShaderStageFlagBits::eVertex, .module = *uiVertShader, .pName = "main"},
+        {.stage = vk::ShaderStageFlagBits::eFragment, .module = *uiFragShader, .pName = "main"}};
 
     vk::VertexInputBindingDescription textBindingDesc{
         .binding = 0, .stride = sizeof(TextQuadVertex), .inputRate = vk::VertexInputRate::eVertex};
@@ -193,80 +194,68 @@ private:
 
     auto textGraphicsPipelineResult = textPipeline.createGraphicsPipeline(
         device.logical(), pipelineCache, textShaderStages, vertexInputInfo, inputAssembly,
-        wd.RenderPass, &blendAttachment, &depthStencil);
+        wd.renderPass, &blendAttachment, &depthStencil);
     if (!textGraphicsPipelineResult) {
-      std::println("{}", textGraphicsPipelineResult.error());
-      std::exit(1);
+      return std::unexpected(textGraphicsPipelineResult.error());
     }
     auto uiGraphicsPipelineResult = uiPipeline.createGraphicsPipeline(
         device.logical(), pipelineCache, uiShaderStages, vertexInputInfo, inputAssembly,
-        wd.RenderPass, &blendAttachment, &depthStencil);
+        wd.renderPass, &blendAttachment, &depthStencil);
     if (!uiGraphicsPipelineResult) {
-      std::println("{}", uiGraphicsPipelineResult.error());
-      std::exit(1);
+      return std::unexpected(uiGraphicsPipelineResult.error());
     }
+
+    return {}; // Success
   }
 
-  void SetupVulkan() {
-    auto instanceCreateResult = instance.create();
-    if (!instanceCreateResult) {
-      std::println("{}", instanceCreateResult.error());
-      std::exit(1);
-    }
-    auto setupDebugMessengerResult = instance.setupDebugMessenger();
-    if (!setupDebugMessengerResult) {
-      std::println("{}", setupDebugMessengerResult.error());
-      std::exit(1);
-    }
-    auto pickPhysicalDeviceResult = device.pickPhysicalDevice();
-    if (!pickPhysicalDeviceResult) {
-      std::println("{}", pickPhysicalDeviceResult.error());
-      std::exit(1);
-    }
-    auto createLogicalDeviceResult = device.createLogicalDevice();
-    if (!createLogicalDeviceResult) {
-      std::println("{}", createLogicalDeviceResult.error());
-      std::exit(1);
-    }
+  [[nodiscard]] std::expected<void, std::string> SetupVulkan() {
+    // Each of these methods in the classes `VulkanInstance` and `VulkanDevice`
+    // should also be refactored to return std::expected instead of calling std::exit.
+    if (auto res = instance.create(); !res)
+      return std::unexpected(res.error());
+    if (auto res = instance.setupDebugMessenger(); !res)
+      return std::unexpected(res.error());
+    if (auto res = device.pickPhysicalDevice(); !res)
+      return std::unexpected(res.error());
+    if (auto res = device.createLogicalDevice(); !res)
+      return std::unexpected(res.error());
+
     auto cacheResult = device.logical().createPipelineCache({});
-    if (cacheResult) {
-      pipelineCache = std::move(cacheResult.value());
+    if (!cacheResult) {
+      return std::unexpected("Failed to create pipeline cache: " +
+                             vk::to_string(cacheResult.error()));
     }
+    pipelineCache = std::move(cacheResult.value());
+
+    return {}; // Success
   }
 
-  void SetupVulkanWindow(SDL_Window *sdl_window, vk::Extent2D extent) {
-    VkSurfaceKHR surface_raw_handle;
-    if (static_cast<int>(SDL_Vulkan_CreateSurface(sdl_window, instance.get_C_handle(), nullptr,
-                                                  &surface_raw_handle)) == 0) {
-      std::println("Failed to create Vulkan surface via SDL: {}", SDL_GetError());
-      std::exit(EXIT_FAILURE);
+  [[nodiscard]] std::expected<void, std::string> SetupVulkanWindow(SDL_Window *sdl_window,
+                                                                   vk::Extent2D extent) {
+    VkSurfaceKHR surface_raw_handle = nullptr;
+    if (!SDL_Vulkan_CreateSurface(sdl_window, instance.get_C_handle(), nullptr,
+                                  &surface_raw_handle)) {
+      return std::unexpected("Failed to create Vulkan surface via SDL: " +
+                             std::string(SDL_GetError()));
     }
-    wd.Surface = vk::raii::SurfaceKHR(instance, surface_raw_handle);
 
-    std::vector<vk::Format> requestSurfaceImageFormat = {
-        vk::Format::eB8G8R8A8Srgb, vk::Format::eR8G8B8A8Srgb, vk::Format::eB8G8R8A8Unorm,
-        vk::Format::eR8G8B8A8Unorm};
-    wd.config.SurfaceFormat =
-        selectSurfaceFormat(device.physical(), wd.Surface, requestSurfaceImageFormat,
-                            vk::ColorSpaceKHR::eSrgbNonlinear);
-    std::vector<vk::PresentModeKHR> present_modes = {vk::PresentModeKHR::eFifo};
-    wd.config.PresentMode = selectPresentMode(device.physical(), wd.Surface, present_modes);
-    wd.config.ClearEnable = true;
-    wd.config.ClearValue.color = vk::ClearColorValue(std::array<f32, 4>{0.0, 0.0, 0.0, 1.0});
-
-    createOrResizeWindow(instance, device, wd, extent, MIN_IMAGE_COUNT);
+    wd = std::move(VulkanWindow{device, vk::raii::SurfaceKHR(instance, surface_raw_handle), false});
+    if (auto exp = wd.createOrResize(extent, MIN_IMAGE_COUNT); !exp) {
+      return exp;
+    }
+    return {}; // Success
   }
 
   void FrameRender(ImDrawData *draw_data, f32 deltaTime) {
-    if (!*wd.Swapchain) {
+    if (!*wd.swapchain) {
       return;
     }
 
-    auto &image_acquired_semaphore = wd.FrameSemaphores[wd.SemaphoreIndex].ImageAcquiredSemaphore;
-    auto &render_complete_semaphore = wd.FrameSemaphores[wd.SemaphoreIndex].RenderCompleteSemaphore;
+    auto &image_acquired_semaphore = wd.frameSemaphores[wd.semaphoreIndex].ImageAcquiredSemaphore;
+    auto &render_complete_semaphore = wd.frameSemaphores[wd.semaphoreIndex].RenderCompleteSemaphore;
 
     auto [acquireRes, imageIndex] =
-        device.logical().acquireNextImage2KHR({.swapchain = wd.Swapchain,
+        device.logical().acquireNextImage2KHR({.swapchain = wd.swapchain,
                                                .timeout = UINT64_MAX,
                                                .semaphore = image_acquired_semaphore,
                                                .deviceMask = 1});
@@ -279,10 +268,16 @@ private:
       std::println("Error acquiring swapchain image: {}", vk::to_string(acquireRes));
       return;
     }
-    wd.FrameIndex = imageIndex;
+    wd.frameIndex = imageIndex;
 
-    Frame &currentFrame = wd.Frames[wd.FrameIndex];
-    check_vk_result_hpp(device.logical().waitForFences(*currentFrame.Fence, VK_TRUE, UINT64_MAX));
+    VulkanWindow::Frame &currentFrame = wd.frames[wd.frameIndex];
+    // Errors inside the render loop shouldn't terminate the app.
+    // We just log them and skip the rest of the frame rendering.
+    if (auto res = device.logical().waitForFences(*currentFrame.Fence, VK_TRUE, UINT64_MAX);
+        res != vk::Result::eSuccess) {
+      std::println("Error waiting for fence: {}", vk::to_string(res));
+      return;
+    }
     device.logical().resetFences({*currentFrame.Fence});
 
     currentFrame.CommandPool.reset();
@@ -290,73 +285,72 @@ private:
 
     // Update and draw 3D scene
     if (threeDEngine) {
-      threeDEngine->update(wd.FrameIndex, deltaTime, wd.config.swapchainExtent);
+      threeDEngine->update(wd.frameIndex, deltaTime, wd.swapchainExtent);
     }
 
     std::array<vk::ClearValue, 2> clearValues{};
-    clearValues[0].color = wd.config.ClearValue.color;
+    clearValues[0].color = wd.clearValue.color;
     clearValues[1].depthStencil = {.depth = 1.0, .stencil = 0};
 
     currentFrame.CommandBuffer.beginRenderPass(
-        {.renderPass = *wd.RenderPass,
+        {.renderPass = *wd.renderPass,
          .framebuffer = *currentFrame.Framebuffer,
-         .renderArea = {.offset = {.x = 0, .y = 0}, .extent = wd.config.swapchainExtent},
+         .renderArea = {.offset = {.x = 0, .y = 0}, .extent = wd.swapchainExtent},
          .clearValueCount = static_cast<u32>(clearValues.size()),
          .pClearValues = clearValues.data()},
         vk::SubpassContents::eInline);
     currentFrame.CommandBuffer.setViewport(
         0, vk::Viewport{.x = 0.0,
                         .y = 0.0,
-                        .width = (f32)wd.config.swapchainExtent.width,
-                        .height = (f32)wd.config.swapchainExtent.height,
+                        .width = static_cast<f32>(wd.swapchainExtent.width),
+                        .height = static_cast<f32>(wd.swapchainExtent.height),
                         .minDepth = 0.0,
                         .maxDepth = 1.0});
     currentFrame.CommandBuffer.setScissor(
-        0, vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = wd.config.swapchainExtent});
+        0, vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = wd.swapchainExtent});
 
     if (threeDEngine) {
-      threeDEngine->draw(currentFrame.CommandBuffer, wd.FrameIndex);
+      threeDEngine->draw(currentFrame.CommandBuffer, wd.frameIndex);
     }
 
     // Prepare and draw 2D elements
-    textSystem->beginFrame();
-    uiSystem->beginFrame();
+    textSystem.beginFrame();
+    uiSystem.beginFrame();
     RenderQueue renderQueue;
 
     if (textView) {
-      textView->setDimensions((float)wd.config.swapchainExtent.width,
-                              (float)wd.config.swapchainExtent.height);
-      size_t firstLine = textView->getFirstVisibleLine();
-      size_t numLines = textView->getVisibleLineCount();
-      size_t lastLine = std::min(firstLine + numLines, textEditor.lineCount());
-      float currentLineYpos = 100.0;
+      textView->setDimensions(5000.0, 3000.0);
+      usize firstLine = textView->getFirstVisibleLine();
+      usize numLines = textView->getVisibleLineCount();
+      usize lastLine = std::min(firstLine + numLines, textEditor.lineCount());
+      f32 currentLineYpos = 100.0;
 
       if (!registeredFonts.empty()) {
-        for (size_t i = firstLine; i < lastLine; ++i) {
-          textSystem->queueText(registeredFonts[0], textEditor.getLine(i), 36, 200.0,
-                                currentLineYpos, {1.0, 1.0, 1.0, 1.0});
-          const double pointSize = 36.0;
-          const double fontUnitToPixelScale =
+        for (usize i = firstLine; i < lastLine; ++i) {
+          textSystem.queueText(registeredFonts[0], textEditor.getLine(i), textView->fontPointSize,
+                               200.0, currentLineYpos, {1.0, 1.0, 1.0, 1.0});
+          const f64 pointSize = 36.0;
+          const f64 fontUnitToPixelScale =
               pointSize * (96.0 / 72.0 * 2) / registeredFonts[0]->atlasData.unitsPerEm;
-          const double line_height_px =
+          const f64 line_height_px =
               registeredFonts[0]->atlasData.lineHeight * fontUnitToPixelScale;
-          currentLineYpos += (line_height_px > 0) ? static_cast<float>(line_height_px) : 38.0;
+          currentLineYpos += (line_height_px > 0) ? static_cast<f32>(line_height_px) : 38.0;
         }
       }
     }
 
-    uiSystem->queueQuad({.position = {200, 200},
-                         .size = {300, 300},
-                         .color = {0.0, 1.0, 0.0, 1.0},
-                         .z_layer = 0.0});
-    uiSystem->queueQuad({.position = {1000, 200},
-                         .size = {100, 300},
-                         .color = {0.0, 0.0, 1.0, 1.0},
-                         .z_layer = 0.0});
+    uiSystem.queueQuad({.position = {200, 200},
+                        .size = {300, 300},
+                        .color = {0.0, 1.0, 0.0, 1.0},
+                        .z_layer = 0.0});
+    uiSystem.queueQuad({.position = {1000, 200},
+                        .size = {100, 300},
+                        .color = {0.0, 0.0, 1.0, 1.0},
+                        .z_layer = 0.0});
 
-    textSystem->prepareBatches(renderQueue, textPipeline, wd.FrameIndex, wd.config.swapchainExtent,
-                               textToggles);
-    uiSystem->prepareBatches(renderQueue, uiPipeline, wd.FrameIndex, wd.config.swapchainExtent);
+    textSystem.prepareBatches(renderQueue, textPipeline, wd.frameIndex, wd.swapchainExtent,
+                              textToggles);
+    uiSystem.prepareBatches(renderQueue, uiPipeline, wd.frameIndex, wd.swapchainExtent);
     processRenderQueue(currentFrame.CommandBuffer, renderQueue);
 
     ImGui_ImplVulkan_RenderDrawData(draw_data, *currentFrame.CommandBuffer);
@@ -375,15 +369,15 @@ private:
   }
 
   void FramePresent() {
-    if (swapChainRebuild || !*wd.Swapchain) {
+    if (swapChainRebuild || !*wd.swapchain) {
       return;
     }
-    auto &render_complete_semaphore = wd.FrameSemaphores[wd.SemaphoreIndex].RenderCompleteSemaphore;
+    auto &render_complete_semaphore = wd.frameSemaphores[wd.semaphoreIndex].RenderCompleteSemaphore;
     vk::PresentInfoKHR presentInfo{.waitSemaphoreCount = 1,
                                    .pWaitSemaphores = &*render_complete_semaphore,
                                    .swapchainCount = 1,
-                                   .pSwapchains = &*wd.Swapchain,
-                                   .pImageIndices = &wd.FrameIndex};
+                                   .pSwapchains = &*wd.swapchain,
+                                   .pImageIndices = &wd.frameIndex};
     vk::Result presentResult = device.queue_.presentKHR(presentInfo);
     if (presentResult == vk::Result::eErrorOutOfDateKHR ||
         presentResult == vk::Result::eSuboptimalKHR) {
@@ -391,7 +385,7 @@ private:
     } else if (presentResult != vk::Result::eSuccess) {
       std::println("Error presenting swapchain image: {}", vk::to_string(presentResult));
     }
-    wd.SemaphoreIndex = (wd.SemaphoreIndex + 1) % wd.FrameSemaphores.size();
+    wd.semaphoreIndex = (wd.semaphoreIndex + 1) % wd.frameSemaphores.size();
   }
 
   static vk::Extent2D get_window_size(SDL_Window *window) {
@@ -402,12 +396,12 @@ private:
             .height = static_cast<u32>(height > 0 ? height : 1)};
   }
 
-  void readKeyboard(float deltaTime, SDL_Window *sdl_window) {
+  void readKeyboard(f32 deltaTime, SDL_Window *sdl_window) {
     static bool isFullscreen = false;
     const auto *const keystate = SDL_GetKeyboardState(nullptr);
     if (threeDEngine) {
       auto &camera = threeDEngine->getCamera();
-      float velocity = camera.MovementSpeed * deltaTime;
+      f32 velocity = camera.MovementSpeed * deltaTime;
       if (keystate[SDL_SCANCODE_W]) {
         camera.Position += camera.Front * velocity;
       }
@@ -438,12 +432,17 @@ private:
     imguiIO.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     using Clock = std::chrono::high_resolution_clock;
     auto previousTime = Clock::now();
-    float deltaTime = 0.0;
+    f32 deltaTime = 0.0;
     bool done = false;
 
     while (!done) {
+      // Check the atomic flag. If ImGui's Vulkan init failed, we exit the loop.
+      if (g_imgui_fatal_error_flag.load()) {
+        done = true;
+      }
+
       auto currentTime = Clock::now();
-      deltaTime = std::chrono::duration<float>(currentTime - previousTime).count();
+      deltaTime = std::chrono::duration<f32>(currentTime - previousTime).count();
       previousTime = currentTime;
 
       SDL_Event event;
@@ -505,9 +504,9 @@ private:
 
       if (swapChainRebuild) {
         device.logical().waitIdle();
-        createOrResizeWindow(instance, device, wd, currentExtent, MIN_IMAGE_COUNT);
+        wd.createOrResize(currentExtent, MIN_IMAGE_COUNT);
         if (threeDEngine) {
-          threeDEngine->onSwapchainRecreated(wd.Frames.size());
+          threeDEngine->onSwapchainRecreated(wd.getImageCount());
         }
         swapChainRebuild = false;
       }
@@ -520,7 +519,7 @@ private:
         RenderCameraControlMenu(threeDEngine->getCamera());
         RenderLightControlMenu(threeDEngine->getLightUbo());
         RenderShaderTogglesMenu(threeDEngine->getShaderToggles());
-        RenderSceneHierarchyMaterialEditor(threeDEngine->getScene(), wd.FrameIndex);
+        RenderSceneHierarchyMaterialEditor(threeDEngine->getScene(), wd.frameIndex);
       }
       RenderVulkanStateWindow(device, wd, 120, deltaTime);
       RenderTextMenu(fontSizeMultiplier, textToggles);
@@ -532,30 +531,57 @@ private:
   }
 
 public:
+  // The main entry point for the application. It returns an integer status code.
+  // 0 for success, non-zero for failure.
   int run(SDL_Window *sdl_window) {
-    SetupVulkan();
-    SetupVulkanWindow(sdl_window, get_window_size(sdl_window));
+    // We now check the result of each initialization step.
+    // If a step fails, we print the error and return a non-zero exit code.
+    if (auto res = SetupVulkan(); !res) {
+      std::println("Vulkan setup failed: {}", res.error());
+      return 1;
+    }
+    if (auto res = SetupVulkanWindow(sdl_window, get_window_size(sdl_window)); !res) {
+      std::println("Vulkan window setup failed: {}", res.error());
+      return 1;
+    }
 
     u32 numMeshesEstimate = 100;
+    // Assume device.createDescriptorPool also returns std::expected
     auto createDescriptorPoolResult =
-        device.createDescriptorPool(static_cast<u32>(wd.Frames.size()) * numMeshesEstimate);
+        device.createDescriptorPool(static_cast<u32>(wd.getImageCount()) * numMeshesEstimate);
     if (!createDescriptorPoolResult) {
-      std::println("{}", createDescriptorPoolResult.error());
-      std::exit(1);
+      std::println("Failed to create descriptor pool: {}", createDescriptorPoolResult.error());
+      return 1;
     }
 
     // Initialize Engines
-    threeDEngine = std::make_unique<ThreeDEngine>(device, wd.Frames.size(), thread_pool);
-    auto threeDEngineInitResult = threeDEngine->initialize(wd.RenderPass, pipelineCache);
-    if (!threeDEngineInitResult) {
-      std::println("{}", threeDEngineInitResult.error());
-      std::exit(1);
+    threeDEngine = std::make_unique<ThreeDEngine>(device, wd.getImageCount(), thread_pool);
+    // Assume threeDEngine->initialize also returns std::expected
+    if (auto res = threeDEngine->initialize(wd.renderPass, pipelineCache); !res) {
+      std::println("3D engine initialization failed: {}", res.error());
+      return 1;
     }
     threeDEngine->loadInitialAssets();
 
-    create2DGraphicsPipelines();
-    textSystem = std::make_unique<TextSystem>(device, wd.Frames.size(), device.descriptorPool_);
-    uiSystem = std::make_unique<UISystem>(device, wd.Frames.size(), device.descriptorPool_);
+    if (auto res = create2DGraphicsPipelines(); !res) {
+      std::println("2D graphics pipeline creation failed: {}", res.error());
+      return 1;
+    }
+
+    auto textSystemExpected =
+        TextSystem::create(device, wd.getImageCount(), device.descriptorPool_);
+    if (!textSystemExpected) {
+      std::println("textSystem creation failed: {}", textSystemExpected.error());
+      return 1;
+    }
+    textSystem = std::move(textSystemExpected.value());
+
+    auto uiSystemExpected = UISystem::create(device, wd.getImageCount(), device.descriptorPool_);
+    if (!uiSystemExpected) {
+      std::println("uiSystem creation failed: {}", uiSystemExpected.error());
+      return 1;
+    }
+    uiSystem = std::move(uiSystemExpected.value());
 
     // Load 2D assets
     {
@@ -570,10 +596,11 @@ public:
              .descriptorType = vk::DescriptorType::eCombinedImageSampler,
              .descriptorCount = 1,
              .stageFlags = vk::ShaderStageFlagBits::eFragment}};
-        vk::DescriptorSetLayoutCreateInfo textLayoutInfo{.bindingCount = (u32)textBindings.size(),
+        vk::DescriptorSetLayoutCreateInfo textLayoutInfo{.bindingCount =
+                                                             static_cast<u32>(textBindings.size()),
                                                          .pBindings = textBindings.data()};
         textSetLayout = device.logical().createDescriptorSetLayout(textLayoutInfo).value();
-        return textSystem->registerFont(
+        return textSystem.registerFont(
             "../assets/fonts/Inconsolata/InconsolataNerdFontMono-Regular.ttf", 64, textSetLayout);
       }));
     }
@@ -585,11 +612,11 @@ public:
     ImGui_ImplSDL3_InitForVulkan(sdl_window);
     ImGui_ImplVulkan_InitInfo init_info = device.init_info();
     init_info.Instance = instance.get_C_handle();
-    init_info.RenderPass = *wd.RenderPass;
+    init_info.RenderPass = *wd.renderPass;
     init_info.MinImageCount = MIN_IMAGE_COUNT;
-    init_info.ImageCount = static_cast<u32>(wd.Frames.size());
+    init_info.ImageCount = static_cast<u32>(wd.getImageCount());
     init_info.PipelineCache = *pipelineCache;
-    init_info.CheckVkResultFn = check_vk_result;
+    init_info.CheckVkResultFn = check_vk_result_for_imgui;
     ImGui_ImplVulkan_Init(&init_info);
     ImGui_ImplVulkan_CreateFontsTexture();
 
@@ -600,6 +627,6 @@ public:
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
-    return 0;
+    return 0; // Success
   }
 };

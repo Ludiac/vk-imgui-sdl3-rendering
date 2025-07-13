@@ -17,7 +17,7 @@ findMemoryType(const vk::raii::PhysicalDevice &physicalDevice, u32 typeFilter,
                vk::MemoryPropertyFlags properties) {
   vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();
   for (u32 i = 0; i < memProperties.memoryTypeCount; ++i) {
-    if ((typeFilter & (1 << i)) &&
+    if (((typeFilter & (1 << i)) != 0) &&
         (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
       return i;
     }

@@ -17,7 +17,7 @@ export struct Texture {
   vk::raii::Sampler sampler{nullptr};
 
   vk::Format format{vk::Format::eUndefined};
-  vk::Extent3D extent{0, 0, 0};
+  vk::Extent3D extent{.width = 0, .height = 0, .depth = 0};
   u32 mipLevels{0};
   u32 arrayLayers{0};
 };
@@ -39,7 +39,7 @@ void copyBufferToImage(const vk::raii::CommandBuffer &commandBuffer, vk::Buffer 
                              .bufferRowLength = 0,
                              .bufferImageHeight = 0,
                              .imageSubresource = imageSubresource,
-                             .imageOffset = {0, 0, 0},
+                             .imageOffset = {.x = 0, .y = 0, .z = 0},
                              .imageExtent = extent};
   commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, region);
 }
@@ -48,8 +48,9 @@ void copyBufferToImage(const vk::raii::CommandBuffer &commandBuffer, vk::Buffer 
 void generateMipmaps(VulkanDevice &vulkanDevice, const vk::raii::CommandBuffer &commandBuffer,
                      vk::Image image, vk::Extent2D texExtent, u32 totalMipLevels, vk::Format format,
                      u32 arrayLayers = 1, u32 baseArrayLayer = 0) {
-  if (totalMipLevels <= 1)
+  if (totalMipLevels <= 1) {
     return;
+  }
 
   vk::FormatProperties formatProperties = vulkanDevice.physical().getFormatProperties(format);
   if (!(formatProperties.optimalTilingFeatures &
@@ -64,8 +65,8 @@ void generateMipmaps(VulkanDevice &vulkanDevice, const vk::raii::CommandBuffer &
                                                  .baseArrayLayer = baseArrayLayer,
                                                  .layerCount = arrayLayers};
 
-  int32_t mipWidth = static_cast<int32_t>(texExtent.width);
-  int32_t mipHeight = static_cast<int32_t>(texExtent.height);
+  i32 mipWidth = static_cast<i32>(texExtent.width);
+  i32 mipHeight = static_cast<i32>(texExtent.height);
 
   for (u32 i = 1; i < totalMipLevels; ++i) {
     subresourceRangeBase.baseMipLevel = i - 1;
@@ -80,12 +81,14 @@ void generateMipmaps(VulkanDevice &vulkanDevice, const vk::raii::CommandBuffer &
                            .mipLevel = i - 1,
                            .baseArrayLayer = baseArrayLayer,
                            .layerCount = arrayLayers},
-        .srcOffsets = std::array<vk::Offset3D, 2>{{{0, 0, 0}, {mipWidth, mipHeight, 1}}},
+        .srcOffsets = std::array<vk::Offset3D, 2>{{{.x = 0, .y = 0, .z = 0},
+                                                   {.x = mipWidth, .y = mipHeight, .z = 1}}},
         .dstSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
                            .mipLevel = i,
                            .baseArrayLayer = baseArrayLayer,
                            .layerCount = arrayLayers},
-        .dstOffsets = std::array<vk::Offset3D, 2>{{{0, 0, 0}, {nextMipWidth, nextMipHeight, 1}}}};
+        .dstOffsets = std::array<vk::Offset3D, 2>{
+            {{.x = 0, .y = 0, .z = 0}, {.x = nextMipWidth, .y = nextMipHeight, .z = 1}}}};
 
     commandBuffer.blitImage(image, vk::ImageLayout::eTransferSrcOptimal, image,
                             vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
@@ -134,7 +137,7 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
 
   VmaBuffer stagingVmaBuffer;
 
-  if (pixels && imageSize > 0) {
+  if (pixels != nullptr && imageSize > 0) {
     vk::BufferCreateInfo stagingBufferInfo{.size = imageSize,
                                            .usage = vk::BufferUsageFlagBits::eTransferSrc};
     vma::AllocationCreateInfo stagingAllocInfo{
@@ -142,13 +145,15 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
                  vma::AllocationCreateFlagBits::eMapped,
         .usage = vma::MemoryUsage::eAutoPreferHost};
     auto stagingResult = vulkanDevice.createBufferVMA(stagingBufferInfo, stagingAllocInfo);
-    if (!stagingResult)
+    if (!stagingResult) {
       return std::unexpected("createTexture: Staging buffer creation failed: " +
                              stagingResult.error());
+    }
     stagingVmaBuffer = std::move(stagingResult.value());
 
-    if (!stagingVmaBuffer.getMappedData())
+    if (stagingVmaBuffer.getMappedData() == nullptr) {
       return std::unexpected("createTexture: Staging buffer not mapped.");
+    }
     std::memcpy(stagingVmaBuffer.getMappedData(), pixels, static_cast<size_t>(imageSize));
   }
 
@@ -177,8 +182,9 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
   };
 
   auto vmaImageResult = vulkanDevice.createImageVMA(imageCi, imageAllocInfo);
-  if (!vmaImageResult)
+  if (!vmaImageResult) {
     return std::unexpected("createTexture: VMA image creation failed: " + vmaImageResult.error());
+  }
   textureOut.image = std::move(vmaImageResult.value());
 
   auto commandBufferExpected = vulkanDevice.beginSingleTimeCommands();
@@ -203,7 +209,7 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
     }
   }
 
-  if (pixels && imageSize > 0) {
+  if (pixels != nullptr && imageSize > 0) {
     transitionImageLayout(commandBuffer, textureOut.image.get(), textureOut.format,
                           vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal,
                           baseSubresourceRange);
@@ -216,10 +222,10 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
                                       texExtent, copySubresourceLayers);
 
     if (generateMipmaps && textureOut.mipLevels > 1) {
-      TextureHelpers::generateMipmaps(vulkanDevice, commandBuffer, textureOut.image.get(),
-                                      vk::Extent2D{texExtent.width, texExtent.height},
-                                      textureOut.mipLevels, textureOut.format,
-                                      textureOut.arrayLayers);
+      TextureHelpers::generateMipmaps(
+          vulkanDevice, commandBuffer, textureOut.image.get(),
+          vk::Extent2D{.width = texExtent.width, .height = texExtent.height}, textureOut.mipLevels,
+          textureOut.format, textureOut.arrayLayers);
     } else {
       transitionImageLayout(commandBuffer, textureOut.image.get(), textureOut.format,
                             vk::ImageLayout::eTransferDstOptimal,
@@ -254,12 +260,13 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
                            .baseArrayLayer = 0,
                            .layerCount = textureOut.arrayLayers}};
   auto viewResult = vulkanDevice.logical().createImageView(viewInfo);
-  if (!viewResult)
+  if (!viewResult) {
     return std::unexpected("createTexture: Failed to create ImageView: " +
                            vk::to_string(viewResult.error()));
+  }
   textureOut.view = std::move(*viewResult);
 
-  if (pCustomSamplerInfo) {
+  if (pCustomSamplerInfo != nullptr) {
     auto samplerResultValue = vulkanDevice.logical().createSampler(*pCustomSamplerInfo);
     if (!samplerResultValue) {
       return std::unexpected("createTexture: Failed to create custom sampler: " +
@@ -274,17 +281,20 @@ createTexture(VulkanDevice &vulkanDevice, const void *pixels, vk::DeviceSize ima
         .addressModeU = vk::SamplerAddressMode::eRepeat,
         .addressModeV = vk::SamplerAddressMode::eRepeat,
         .addressModeW = vk::SamplerAddressMode::eRepeat,
-        .mipLodBias = 0.0f,
-        .anisotropyEnable = vulkanDevice.physical().getFeatures().samplerAnisotropy ? true : false,
-        .maxAnisotropy = vulkanDevice.physical().getFeatures().samplerAnisotropy
-                             ? vulkanDevice.physical().getProperties().limits.maxSamplerAnisotropy
-                             : 1.0f,
-        .compareEnable = false,
+        .mipLodBias = 0.0,
+        .anisotropyEnable = vulkanDevice.physical().getFeatures().samplerAnisotropy == vk::True
+                                ? vk::True
+                                : vk::False,
+        .maxAnisotropy = static_cast<float>(
+            vulkanDevice.physical().getFeatures().samplerAnisotropy == vk::True
+                ? vulkanDevice.physical().getProperties().limits.maxSamplerAnisotropy
+                : 1.0),
+        .compareEnable = vk::False,
         .compareOp = vk::CompareOp::eAlways,
-        .minLod = 0.0f,
+        .minLod = 0.0,
         .maxLod = static_cast<float>(textureOut.mipLevels),
         .borderColor = vk::BorderColor::eFloatOpaqueBlack,
-        .unnormalizedCoordinates = false};
+        .unnormalizedCoordinates = vk::False};
     auto samplerResultValue = vulkanDevice.logical().createSampler(samplerInfo);
     if (!samplerResultValue) {
       return std::unexpected("createTexture: Failed to create default sampler: " +
@@ -302,7 +312,7 @@ createDefaultTexture(VulkanDevice &vulkanDevice, const vk::raii::Queue &transfer
                      vk::Format format = vk::Format::eR8G8B8A8Unorm,
                      std::array<uint8_t, 4> color = {255, 255, 255, 255},
                      const vk::SamplerCreateInfo *pCustomSamplerInfo = nullptr) {
-  vk::Extent3D extent = {1, 1, 1};
+  vk::Extent3D extent = {.width = 1, .height = 1, .depth = 1};
   std::vector<uint8_t> pixels;
   u32 bytesPerPixel = 0;
 

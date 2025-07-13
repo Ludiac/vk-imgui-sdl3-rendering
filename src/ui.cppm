@@ -36,13 +36,13 @@ export struct TextInstanceData {
   glm::vec4 color; // NEW: Color is now per-instance
   glm::vec3 _padding;
   float pxRange;
-};
+} __attribute__((aligned(64)));
 
 // The vertex format for our static unit quad.
 struct UIQuadVertex {
   glm::vec2 pos;
   glm::vec2 uv;
-};
+} __attribute__((aligned(16)));
 
 export struct Quad {
   glm::vec2 position;
@@ -85,7 +85,7 @@ export struct RenderBatch {
   // --- NEW: Generic Push Constant Data ---
   std::array<std::byte, 128> pushConstantData{}; // 128 bytes is the min guaranteed size
   uint32_t pushConstantSize = 0;
-  vk::ShaderStageFlags pushConstantStages{};
+  vk::ShaderStageFlags pushConstantStages;
 
   // Comparison operator for sorting. We don't sort by push constants as they are expected to change
   // frequently.
@@ -107,6 +107,21 @@ export struct RenderBatch {
 // The RenderQueue is simply a vector of batches for a given frame.
 export using RenderQueue = std::vector<RenderBatch>;
 
+void sort_render_queue(std::vector<RenderBatch> &queue) {
+  std::ranges::sort(queue, [](const RenderBatch &a, const RenderBatch &b) {
+    if (a.sortKey != b.sortKey) {
+      return a.sortKey < b.sortKey;
+    }
+    if (a.pipeline != b.pipeline) {
+      return a.pipeline < b.pipeline;
+    }
+    if (a.textureSet != b.textureSet) {
+      return a.textureSet < b.textureSet;
+    }
+    return false;
+  });
+}
+
 export size_t pad_uniform_buffer_size(size_t originalSize, size_t minAlignment) {
   if (minAlignment > 0) {
     return (originalSize + minAlignment - 1) & ~(minAlignment - 1);
@@ -117,10 +132,10 @@ export size_t pad_uniform_buffer_size(size_t originalSize, size_t minAlignment) 
 export [[nodiscard]] std::expected<void, std::string>
 createStaticQuadBuffers(VulkanDevice &device, VmaBuffer &vertexBuffer, VmaBuffer &indexBuffer) {
   const std::vector<TextQuadVertex> vertices = {
-      {{0.0f, 1.0f}, {0.0f, 1.0f}}, // Bottom-left
-      {{1.0f, 1.0f}, {1.0f, 1.0f}}, // Bottom-right
-      {{1.0f, 0.0f}, {1.0f, 0.0f}}, // Top-right
-      {{0.0f, 0.0f}, {0.0f, 0.0f}}  // Top-left
+      {.pos = {0.0, 1.0}, .uv = {0.0, 1.0}}, // Bottom-let
+      {.pos = {1.0, 1.0}, .uv = {1.0, 1.0}}, // Bottom-right
+      {.pos = {1.0, 0.0}, .uv = {1.0, 0.0}}, // Top-right
+      {.pos = {0.0, 0.0}, .uv = {0.0, 0.0}}  // Top-let
   };
   std::vector<uint32_t> indices = {0, 1, 2, 2, 3, 0};
   convertToCCW(indices);
@@ -131,8 +146,9 @@ createStaticQuadBuffers(VulkanDevice &device, VmaBuffer &vertexBuffer, VmaBuffer
     vma::AllocationCreateInfo allocInfo{.flags = vma::AllocationCreateFlagBits::eMapped,
                                         .usage = vma::MemoryUsage::eCpuOnly};
     auto res = device.createBufferVMA(bufInfo, allocInfo);
-    if (!res)
+    if (!res) {
       return std::unexpected("Failed to create staging buffer");
+    }
     VmaBuffer buf = std::move(*res);
     std::memcpy(buf.getMappedData(), data, static_cast<size_t>(size));
     return std::expected<VmaBuffer, std::string>(std::move(buf));
@@ -145,20 +161,23 @@ createStaticQuadBuffers(VulkanDevice &device, VmaBuffer &vertexBuffer, VmaBuffer
                                  .usage = usage | vk::BufferUsageFlagBits::eTransferDst};
     vma::AllocationCreateInfo allocInfo{.usage = vma::MemoryUsage::eGpuOnly};
     auto res = device.createBufferVMA(bufInfo, allocInfo);
-    if (!res)
+    if (!res) {
       return std::unexpected("Failed to create device-local buffer");
+    }
     return std::expected<VmaBuffer, std::string>(std::move(*res));
   };
 
   // Vertex buffer
   const vk::DeviceSize vertexSize = sizeof(TextQuadVertex) * vertices.size();
   auto stagingVb = createStagingBuffer(vertexSize, vertices.data());
-  if (!stagingVb)
+  if (!stagingVb) {
     return std::unexpected("Failed to create text staging VB");
+  }
 
   auto vertexBuf = createDeviceBuffer(vertexSize, vk::BufferUsageFlagBits::eVertexBuffer);
-  if (!vertexBuf)
+  if (!vertexBuf) {
     return std::unexpected("Failed to create text static VB");
+  }
 
   EXPECTED_VOID(device.copyBuffer(stagingVb->get(), vertexBuf->get(), vertexSize));
   vertexBuffer = std::move(*vertexBuf);
@@ -166,12 +185,14 @@ createStaticQuadBuffers(VulkanDevice &device, VmaBuffer &vertexBuffer, VmaBuffer
   // Index buffer
   const vk::DeviceSize indexSize = sizeof(uint32_t) * indices.size();
   auto stagingIb = createStagingBuffer(indexSize, indices.data());
-  if (!stagingIb)
+  if (!stagingIb) {
     return std::unexpected("Failed to create text staging IB");
+  }
 
   auto indexBuf = createDeviceBuffer(indexSize, vk::BufferUsageFlagBits::eIndexBuffer);
-  if (!indexBuf)
+  if (!indexBuf) {
     return std::unexpected("Failed to create text static IB");
+  }
 
   EXPECTED_VOID(device.copyBuffer(stagingIb->get(), indexBuf->get(), indexSize));
   indexBuffer = std::move(*indexBuf);
@@ -212,7 +233,7 @@ export void processRenderQueue(const vk::raii::CommandBuffer &cmd, RenderQueue &
     return;
   }
 
-  std::sort(queue.begin(), queue.end());
+  sort_render_queue(queue);
 
   vk::raii::Pipeline const *lastPipeline = nullptr;
   vk::raii::DescriptorSet const *lastTextureSet = nullptr;
@@ -244,7 +265,7 @@ export void processRenderQueue(const vk::raii::CommandBuffer &cmd, RenderQueue &
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *batch.pipelineLayout, 0,
                            {*batch.instanceDataSet}, {batch.dynamicOffset});
 
-    if (batch.textureSet && batch.textureSet != lastTextureSet) {
+    if ((batch.textureSet != nullptr) && batch.textureSet != lastTextureSet) {
       cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *batch.pipelineLayout, 1,
                              {*batch.textureSet}, {});
       lastTextureSet = batch.textureSet;

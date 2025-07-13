@@ -18,8 +18,8 @@ import :text;
 import :ui;
 
 export struct TextToggles {
-  float sdf_weight{0.0f};
-  float pxRangeDirectAdditive{0.78f};
+  float sdf_weight{0.0};
+  float pxRangeDirectAdditive{0.78};
   i32 antiAliasingMode{2}; // Corresponds to AA_LINEAR by default
   float start_fade_px{0.5};
   float end_fade_px{1.0};
@@ -35,28 +35,96 @@ struct TextPushConstants2D {
 // This class is responsible for laying out text and preparing it for rendering.
 export class TextSystem {
 private:
-  VulkanDevice &device;
-  u32 frameCount;
-  u32 maxQuadsPerFrame;
-  size_t minStorageBufferOffsetAlignment;
+  VulkanDevice *device{};
+  u32 frameCount{};
+  u32 maxQuadsPerFrame{2048};
+  size_t minStorageBufferOffsetAlignment{0};
   std::vector<std::unique_ptr<Font>> registeredFonts;
   std::vector<VmaBuffer> instanceBuffers;
   using InstanceVector = std::vector<TextInstanceData>;
-  std::map<Font *, InstanceVector> frameBatch;
+  std::flat_map<Font *, InstanceVector> frameBatch;
   VmaBuffer staticVertexBuffer;
   VmaBuffer staticIndexBuffer;
   std::vector<vk::raii::DescriptorSet> instanceDataDescriptorSets;
   vk::raii::DescriptorSetLayout instanceDataLayout{nullptr};
 
 public:
-  TextSystem(VulkanDevice &dev, u32 inFlightFrameCount, const vk::raii::DescriptorPool &pool)
-      : device(dev), frameCount(inFlightFrameCount), maxQuadsPerFrame(2048) {
-    EXPECTED_VOID(createInstanceBuffers(device, frameCount, maxQuadsPerFrame, instanceBuffers,
-                                        sizeof(TextInstanceData)));
-    EXPECTED_VOID(createInstanceDataDescriptorSetLayout());
-    EXPECTED_VOID(allocateDescriptorSets(pool));
-    EXPECTED_VOID(createStaticQuadBuffers(device, staticVertexBuffer, staticIndexBuffer));
+  // Constructor now takes only essential parameters, no heavy initialization.
+  TextSystem(VulkanDevice &dev, u32 inFlightFrameCount)
+      : device(&dev), frameCount(inFlightFrameCount),
+        minStorageBufferOffsetAlignment(dev.limits.minStorageBufferOffsetAlignment) {}
+  TextSystem() = default;
+
+  // Private initialization function to handle fallible setup steps.
+  [[nodiscard]] std::expected<void, std::string> initialize(const vk::raii::DescriptorPool &pool) {
+    if (auto res = createInstanceBuffers(*device, frameCount, maxQuadsPerFrame, instanceBuffers,
+                                         sizeof(TextInstanceData));
+        !res) {
+      return std::unexpected("Failed to create text instance buffers: " + res.error());
+    }
+    if (auto res = createInstanceDataDescriptorSetLayout(); !res) {
+      return std::unexpected(res.error());
+    }
+    if (auto res = allocateDescriptorSets(pool); !res) {
+      return std::unexpected(res.error());
+    }
+    if (auto res = createStaticQuadBuffers(*device, staticVertexBuffer, staticIndexBuffer); !res) {
+      return std::unexpected("Failed to create static quad buffers: " + res.error());
+    }
+    return {};
   }
+
+  // Factory function for safe, two-phase initialization.
+  // Returns a fully initialized object by value or an error.
+  [[nodiscard]] static std::expected<TextSystem, std::string>
+  create(VulkanDevice &dev, u32 inFlightFrameCount, const vk::raii::DescriptorPool &pool) {
+    TextSystem system(dev, inFlightFrameCount);
+    if (auto res = system.initialize(pool); !res) {
+      return std::unexpected(res.error());
+    }
+    return std::move(system);
+  }
+
+  // Ensure the class is non-copyable but movable, as it manages GPU resources.
+  TextSystem(const TextSystem &) = delete;
+  TextSystem &operator=(const TextSystem &) = delete;
+  TextSystem(TextSystem &&) = default;
+  // TextSystem &operator=(TextSystem &&) = default;
+  TextSystem &operator=(TextSystem &&other) noexcept {
+    if (this != &other) {
+      // Release current resources
+      // For vk::raii objects, their destructors handle resource release
+      // For VmaBuffer, ensure proper destruction or move semantics if not handled by RAII
+      // In this case, VmaBuffer is likely RAII, so simply move assigning will call its operator=
+      // which should handle the underlying VMA allocation correctly.
+
+      device = other.device;
+      frameCount = other.frameCount;
+      maxQuadsPerFrame = other.maxQuadsPerFrame;
+      minStorageBufferOffsetAlignment = other.minStorageBufferOffsetAlignment;
+
+      // Move vectors and flat_map
+      registeredFonts = std::move(other.registeredFonts);
+      instanceBuffers = std::move(other.instanceBuffers);
+      frameBatch = std::move(other.frameBatch);
+
+      // Move VmaBuffers (assuming they have proper move assignment)
+      staticVertexBuffer = std::move(other.staticVertexBuffer);
+      staticIndexBuffer = std::move(other.staticIndexBuffer);
+
+      // Move vk::raii::DescriptorSet and vk::raii::DescriptorSetLayout
+      instanceDataDescriptorSets = std::move(other.instanceDataDescriptorSets);
+      instanceDataLayout = std::move(other.instanceDataLayout);
+
+      // Clear the moved-from object's pointers/resources to prevent double-free
+      other.device = nullptr;
+      other.frameCount = 0;
+      other.maxQuadsPerFrame = 0;
+      other.minStorageBufferOffsetAlignment = 0;
+    }
+    return *this;
+  }
+  ~TextSystem() = default;
 
   void beginFrame() { frameBatch.clear(); }
 
@@ -67,15 +135,15 @@ public:
       .addressModeU = vk::SamplerAddressMode::eClampToEdge,
       .addressModeV = vk::SamplerAddressMode::eClampToEdge,
       .addressModeW = vk::SamplerAddressMode::eClampToEdge,
-      .mipLodBias = 0.0f,
-      .anisotropyEnable = true, // Anisotropy can help with slanted views of text
-      .maxAnisotropy = 4.0f,    // A modest value
-      .compareEnable = false,
+      .mipLodBias = 0.0,
+      .anisotropyEnable = vk::True, // Anisotropy can help with slanted views of text
+      .maxAnisotropy = 4.0,         // A modest value
+      .compareEnable = vk::False,
       .compareOp = vk::CompareOp::eAlways,
-      .minLod = 0.0f,
+      .minLod = 0.0,
       .maxLod = vk::LodClampNone, // Allow sampler to use all mip levels if they were generated
       .borderColor = vk::BorderColor::eFloatTransparentBlack,
-      .unnormalizedCoordinates = false,
+      .unnormalizedCoordinates = vk::False,
   };
 
   [[nodiscard]] std::expected<Font *, std::string>
@@ -83,27 +151,32 @@ public:
                const vk::raii::DescriptorSetLayout &textureLayout) {
     auto font = std::make_unique<Font>();
     auto atlasResult = createFontAtlasMSDF(fontPath, pixelHeight);
-    if (!atlasResult)
+    if (!atlasResult) {
       return std::unexpected("Failed to create font atlas: " + atlasResult.error());
+    }
     font->atlasData = std::move(*atlasResult);
 
-    auto texResult = createTexture(
-        device, font->atlasData.atlasBitmap.data(), font->atlasData.atlasBitmap.size(),
-        vk::Extent3D{(u32)font->atlasData.atlasWidth, (u32)font->atlasData.atlasHeight, 1},
-        vk::Format::eR8G8B8A8Unorm, device.queue_,
-        false, // generateMipmaps = false for MSDF
-        {}, {}, 1, vk::ImageViewType::e2D, &msdfFontSamplerCreateInfo);
+    auto texResult = createTexture(*device, font->atlasData.atlasBitmap.data(),
+                                   font->atlasData.atlasBitmap.size(),
+                                   vk::Extent3D{.width = (u32)font->atlasData.atlasWidth,
+                                                .height = (u32)font->atlasData.atlasHeight,
+                                                .depth = 1},
+                                   vk::Format::eR8G8B8A8Unorm, device->queue_,
+                                   false, // generateMipmaps = false for MSDF
+                                   {}, {}, 1, vk::ImageViewType::e2D, &msdfFontSamplerCreateInfo);
 
-    if (!texResult)
+    if (!texResult) {
       return std::unexpected("Failed to create font texture: " + texResult.error());
+    }
     font->texture = std::make_shared<Texture>(std::move(*texResult));
 
-    vk::DescriptorSetAllocateInfo allocInfo{.descriptorPool = device.descriptorPool_,
+    vk::DescriptorSetAllocateInfo allocInfo{.descriptorPool = device->descriptorPool_,
                                             .descriptorSetCount = 1,
                                             .pSetLayouts = &*textureLayout};
-    auto setResult = device.logical().allocateDescriptorSets(allocInfo);
-    if (!setResult)
+    auto setResult = device->logical().allocateDescriptorSets(allocInfo);
+    if (!setResult) {
       return std::unexpected("Failed to allocate font descriptor set.");
+    }
     font->textureDescriptorSet = std::move(setResult.value().front());
     vk::DescriptorImageInfo imageInfo{.sampler = *font->texture->sampler,
                                       .imageView = *font->texture->view,
@@ -113,50 +186,48 @@ public:
                                  .descriptorCount = 1,
                                  .descriptorType = vk::DescriptorType::eCombinedImageSampler,
                                  .pImageInfo = &imageInfo};
-    device.logical().updateDescriptorSets({write}, nullptr);
+    device->logical().updateDescriptorSets({write}, nullptr);
     registeredFonts.push_back(std::move(font));
     return registeredFonts.back().get();
   }
 
-  constexpr const static double SYSTEM_DPI = 96.0;
-  constexpr static double inch = 72.0;
-  constexpr static double mult = SYSTEM_DPI / inch * 2;
+  constexpr const static f64 SYSTEM_DPI = 96.0;
+  constexpr static f64 inch = 72.0;
+  constexpr static f64 mult = SYSTEM_DPI / inch * 4;
 
-  void queueText(Font *font, const std::string &text, u32 pointSize, double x, double y,
+  void queueText(Font *font, const std::string &text, u32 pointSize, f64 x, f64 y,
                  const glm::vec4 &color) {
-    if (!font || text.empty())
+    if (font == nullptr || text.empty()) {
       return;
-
-    const double desiredPixelHeightForEm = static_cast<double>(pointSize) * mult;
+    }
 
     const auto &metrics = font->atlasData;
-    const double baselineY = y;
+    const f64 baselineY = y;
 
     auto &instanceVec = frameBatch[font];
-    double cursorX = x;
+    f64 cursorX = x;
 
-    const double fontUnitToPixelScale =
-        desiredPixelHeightForEm / static_cast<double>(metrics.unitsPerEm);
+    const f64 desiredPixelHeightForEm = static_cast<f64>(pointSize) * mult;
+    const f64 fontUnitToPixelScale = desiredPixelHeightForEm / static_cast<f64>(metrics.unitsPerEm);
 
     for (char c : text) {
       auto it = metrics.glyphs.find(static_cast<u32>(c));
       if (it == metrics.glyphs.end()) {
         it = metrics.glyphs.find(static_cast<u32>('?')); // Fallback
-        if (it == metrics.glyphs.end())
+        if (it == metrics.glyphs.end()) {
           continue;
+        }
       }
 
       const auto &gi = it->second;
 
-      double scaledQuadWidth_d = static_cast<double>(gi.width) * fontUnitToPixelScale;
-      double scaledQuadHeight_d = static_cast<double>(gi.height) * fontUnitToPixelScale;
+      f64 scaledQuadWidth_d = static_cast<f64>(gi.width) * fontUnitToPixelScale;
+      f64 scaledQuadHeight_d = static_cast<f64>(gi.height) * fontUnitToPixelScale;
 
-      double xpos_d = cursorX + (static_cast<double>(gi.bearing_x) * fontUnitToPixelScale);
-      double ypos_d = baselineY - (static_cast<double>(gi.bearing_y) * fontUnitToPixelScale);
+      f64 xpos_d = cursorX + (static_cast<f64>(gi.bearing_x) * fontUnitToPixelScale);
+      f64 ypos_d = baselineY - (static_cast<f64>(gi.bearing_y) * fontUnitToPixelScale);
 
-      double shaderPxRange = static_cast<double>(metrics.pxRange * fontUnitToPixelScale);
-      // double shaderPxRange =
-      //     static_cast<double>(metrics.pxRange) * (fontUnitToPixelScale / metrics.atlasScale);
+      f64 shaderPxRange = static_cast<f64>(metrics.pxRange * fontUnitToPixelScale);
 
       instanceVec.emplace_back(TextInstanceData{
           .screenPos = {static_cast<float>(xpos_d), static_cast<float>(ypos_d)},
@@ -167,27 +238,32 @@ public:
           .pxRange = static_cast<float>(shaderPxRange),
       });
 
-      cursorX += static_cast<double>(gi.advance) * fontUnitToPixelScale;
+      cursorX += static_cast<f64>(gi.advance) * fontUnitToPixelScale;
     }
   }
 
   void prepareBatches(RenderQueue &queue, const VulkanPipeline &textPipeline, u32 frameIndex,
                       vk::Extent2D windowSize, TextToggles textToggles) {
-    if (frameBatch.empty())
+    if (frameBatch.empty()) {
       return;
+    }
 
-    glm::mat4 ortho = glm::ortho(0.0f, (float)windowSize.width, 0.0f, (float)windowSize.height);
+    glm::mat4 ortho = glm::ortho(0.0F, (float)windowSize.width, 0.0F, (float)windowSize.height);
 
     u32 currentFirstInstance = 0;
     uint32_t currentByteOffset = 0;
     VmaBuffer &currentInstanceBuffer = instanceBuffers[frameIndex];
 
     for (auto const &[font, instances] : frameBatch) {
-      if (instances.empty())
+      if (instances.empty()) {
         continue;
+      }
 
       size_t dataSize = instances.size() * sizeof(TextInstanceData);
       if (currentByteOffset + dataSize > currentInstanceBuffer.getAllocationInfo().size) {
+        // Log an error or handle buffer full gracefully
+        std::println("Warning: Running out of buffer space for text instances. Some text might not "
+                     "be rendered.");
         break;
       }
       std::memcpy(static_cast<char *>(currentInstanceBuffer.getMappedData()) + currentByteOffset,
@@ -218,15 +294,20 @@ public:
       queue.push_back(batch);
 
       currentFirstInstance += static_cast<u32>(instances.size());
+      // Ensure pad_uniform_buffer_size is defined and accessible
       size_t alignedSize = pad_uniform_buffer_size(dataSize, this->minStorageBufferOffsetAlignment);
       currentByteOffset += static_cast<u32>(alignedSize);
 
       if (currentByteOffset > currentInstanceBuffer.getAllocationInfo().size) {
-        std::println("run out of buffer space");
+        std::println("run out of buffer space after alignment"); // This condition should ideally be
+                                                                 // caught by the earlier check
         break;
       }
     }
-    updateDescriptorSets(currentFirstInstance, frameIndex);
+    // Only update descriptor sets if there were instances processed
+    if (currentFirstInstance > 0) {
+      updateDescriptorSets(currentFirstInstance, frameIndex);
+    }
   }
 
 private:
@@ -237,9 +318,10 @@ private:
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eVertex}; // Also needed in fragment
     vk::DescriptorSetLayoutCreateInfo layoutInfo{.bindingCount = 1, .pBindings = &instanceBinding};
-    auto layoutResult = device.logical().createDescriptorSetLayout(layoutInfo);
-    if (!layoutResult)
+    auto layoutResult = device->logical().createDescriptorSetLayout(layoutInfo);
+    if (!layoutResult) {
       return std::unexpected("Failed to create text instance data descriptor set layout.");
+    }
     instanceDataLayout = std::move(layoutResult.value());
     return {};
   }
@@ -249,9 +331,10 @@ private:
     std::vector<vk::DescriptorSetLayout> layouts(frameCount, *instanceDataLayout);
     vk::DescriptorSetAllocateInfo instanceAllocInfo{
         .descriptorPool = pool, .descriptorSetCount = frameCount, .pSetLayouts = layouts.data()};
-    auto instanceSetResult = device.logical().allocateDescriptorSets(instanceAllocInfo);
-    if (!instanceSetResult)
+    auto instanceSetResult = device->logical().allocateDescriptorSets(instanceAllocInfo);
+    if (!instanceSetResult) {
       return std::unexpected("Failed to allocate text instance descriptor sets.");
+    }
     instanceDataDescriptorSets = std::move(instanceSetResult.value());
     return {};
   }
@@ -269,6 +352,6 @@ private:
                                          .descriptorType =
                                              vk::DescriptorType::eStorageBufferDynamic,
                                          .pBufferInfo = &bufferInfo};
-    device.logical().updateDescriptorSets({instanceWrite}, nullptr);
+    device->logical().updateDescriptorSets({instanceWrite}, nullptr);
   }
 };

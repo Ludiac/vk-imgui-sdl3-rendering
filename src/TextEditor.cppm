@@ -18,7 +18,7 @@ import std;
 class TextEditor {
 private:
   // Represents which buffer a piece belongs to.
-  enum class BufferType { ORIGINAL, ADD };
+  enum class BufferType : u8 { ORIGINAL, ADD };
 
   // A "piece" descriptor, representing a span of text in one of the buffers.
   struct Piece {
@@ -45,7 +45,8 @@ public:
     m_original_buffer = std::make_unique<std::string>(initial_content);
     m_add_buffer = std::make_unique<std::string>();
 
-    Piece initial_piece = {BufferType::ORIGINAL, 0, m_original_buffer->length()};
+    Piece initial_piece = {
+        .buffer = BufferType::ORIGINAL, .start = 0, .length = m_original_buffer->length()};
     m_pieces.push_back(initial_piece);
     m_length = initial_content.length();
 
@@ -61,14 +62,15 @@ public:
    * @param text The text to insert.
    */
   void insert(size_t pos, std::string_view text) {
-    if (text.empty() || pos > m_length)
+    if (text.empty() || pos > m_length) {
       return;
+    }
     saveStateForUndo();
 
     // 1. Add the new text to the 'add' buffer
     size_t added_start = m_add_buffer->length();
     m_add_buffer->append(text);
-    Piece new_piece = {BufferType::ADD, added_start, text.length()};
+    Piece new_piece = {.buffer = BufferType::ADD, .start = added_start, .length = text.length()};
 
     // 2. Find the piece where the insertion occurs
     auto [iter, offset] = findPiece(pos);
@@ -80,8 +82,9 @@ public:
       m_pieces.insert(std::next(iter), new_piece);
     } else { // Insert in the middle, requiring a split
       Piece &current_piece = *iter;
-      Piece right_part = {current_piece.buffer, current_piece.start + offset,
-                          current_piece.length - offset};
+      Piece right_part = {.buffer = current_piece.buffer,
+                          .start = current_piece.start + offset,
+                          .length = current_piece.length - offset};
       current_piece.length = offset; // This is now the left part
 
       auto next_iter = std::next(iter);
@@ -101,8 +104,9 @@ public:
    * @param length The number of characters to delete.
    */
   void remove(size_t pos, size_t length) {
-    if (length == 0 || pos >= m_length)
+    if (length == 0 || pos >= m_length) {
       return;
+    }
     saveStateForUndo();
 
     size_t end_pos = pos + length;
@@ -123,7 +127,8 @@ public:
       } else {
         // Split the piece into two parts (left and right of the deleted section)
         Piece &p = *start_iter;
-        Piece right_part = {p.buffer, p.start + end_offset, p.length - end_offset};
+        Piece right_part = {
+            .buffer = p.buffer, .start = p.start + end_offset, .length = p.length - end_offset};
         p.length = start_offset; // Left part
         if (p.length == 0) {
           first_affected = m_pieces.erase(start_iter);
@@ -185,9 +190,10 @@ public:
    * @param line_index The zero-based index of the line to retrieve.
    * @return The text of the line, without the newline character.
    */
-  std::string getLine(size_t line_index) const {
-    if (line_index >= m_line_starts.size())
+  [[nodiscard]] std::string getLine(size_t line_index) const {
+    if (line_index >= m_line_starts.size()) {
       return "";
+    }
 
     size_t start_pos = m_line_starts[line_index];
     size_t end_pos =
@@ -208,10 +214,12 @@ public:
    * @param num_lines The number of lines to retrieve.
    * @return A vector of strings, one for each visible line.
    */
-  std::vector<std::string> getVisibleLines(size_t first_visible_line, size_t num_lines) const {
+  [[nodiscard]] std::vector<std::string> getVisibleLines(size_t first_visible_line,
+                                                         size_t num_lines) const {
     std::vector<std::string> lines;
-    if (m_line_starts.empty())
+    if (m_line_starts.empty()) {
       return lines;
+    }
 
     size_t end_line = std::min(first_visible_line + num_lines, m_line_starts.size());
     lines.reserve(end_line - first_visible_line);
@@ -226,10 +234,10 @@ public:
    * @brief Retrieves the entire document as a single string.
    * @note This is an expensive operation. Use for saving, not for display updates.
    */
-  std::string toString() const { return getTextInRange(0, m_length); }
+  [[nodiscard]] std::string toString() const { return getTextInRange(0, m_length); }
 
-  size_t length() const { return m_length; }
-  size_t lineCount() const { return m_line_starts.size(); }
+  [[nodiscard]] size_t length() const { return m_length; }
+  [[nodiscard]] size_t lineCount() const { return m_line_starts.size(); }
 
 private:
   // --- Internal Helper Methods ---
@@ -250,7 +258,7 @@ private:
   }
 
   // Const version for use in methods like charAt() or toString()
-  std::pair<PieceList::const_iterator, size_t> findPiece(size_t pos) const {
+  [[nodiscard]] std::pair<PieceList::const_iterator, size_t> findPiece(size_t pos) const {
     size_t current_pos = 0;
     for (auto it = m_pieces.cbegin(); it != m_pieces.cend(); ++it) {
       if (current_pos + it->length >= pos) {
@@ -350,8 +358,9 @@ private:
 
     size_t current_pos = 0;
     for (const auto &piece : m_pieces) {
-      if (result.length() == length)
+      if (result.length() == length) {
         break;
+      }
 
       size_t piece_end_pos = current_pos + piece.length;
 
@@ -375,8 +384,9 @@ private:
    * @brief Gets the character at a specific position.
    */
   char charAt(size_t pos) const {
-    if (pos >= m_length)
+    if (pos >= m_length) {
       return '\0';
+    }
     auto [iter, offset] = findPiece(pos);
     const std::string *buffer =
         (iter->buffer == BufferType::ORIGINAL) ? m_original_buffer.get() : m_add_buffer.get();
@@ -386,8 +396,9 @@ private:
   void saveStateForUndo() {
     m_undo_stack.push({m_pieces, m_length, m_line_starts});
     // Clear redo stack on new action
-    while (!m_redo_stack.empty())
+    while (!m_redo_stack.empty()) {
       m_redo_stack.pop();
+    }
   }
 
   void restoreState(const HistoryState &state) {

@@ -24,7 +24,7 @@ readSpirvFile(const std::string &filename) NOEXCEPT {
   std::vector<u32> buffer(fileSize / sizeof(u32));
 
   file.seekg(0);
-  file.read(reinterpret_cast<char *>(buffer.data()), fileSize);
+  file.read(reinterpret_cast<char *>(buffer.data()), static_cast<i64>(fileSize));
   file.close();
 
   return buffer;
@@ -91,45 +91,44 @@ export struct VulkanPipeline {
       vk::PipelineInputAssemblyStateCreateInfo inputAssembly,
       const vk::raii::RenderPass &renderPass,
       vk::PipelineColorBlendAttachmentState *colorBlendAttachmentOverride = nullptr,
-      vk::PipelineDepthStencilStateCreateInfo *depthStencilStateOverride = nullptr
-      ) NOEXCEPT {
+      vk::PipelineDepthStencilStateCreateInfo *depthStencilStateOverride = nullptr) NOEXCEPT {
     vk::PipelineViewportStateCreateInfo viewportState{
         .viewportCount = 1,
         .scissorCount = 1,
     };
 
     vk::PipelineRasterizationStateCreateInfo rasterizer{
-        .depthClampEnable = false,
-        .rasterizerDiscardEnable = false,
+        .depthClampEnable = vk::False,
+        .rasterizerDiscardEnable = vk::False,
         .polygonMode = vk::PolygonMode::eFill,
         .cullMode = vk::CullModeFlagBits::eBack,
         .frontFace = vk::FrontFace::eClockwise,
-        .depthBiasEnable = false,
-        .lineWidth = 1.0f,
+        .depthBiasEnable = vk::False,
+        .lineWidth = 1.0,
     };
 
     vk::PipelineMultisampleStateCreateInfo multisampling{
         .rasterizationSamples = vk::SampleCountFlagBits::e1,
-        .sampleShadingEnable = false,
+        .sampleShadingEnable = vk::False,
     };
 
     vk::PipelineDepthStencilStateCreateInfo defaultDepthStencilState{
-        .depthTestEnable = true,
-        .depthWriteEnable = true,
+        .depthTestEnable = vk::True,
+        .depthWriteEnable = vk::True,
         .depthCompareOp = vk::CompareOp::eLess,
     };
 
     vk::PipelineColorBlendAttachmentState defaultColorBlendAttachment{
-        .blendEnable = false,
+        .blendEnable = vk::False,
         .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
     };
 
     vk::PipelineColorBlendStateCreateInfo colorBlending{
-        .logicOpEnable = false,
+        .logicOpEnable = vk::False,
         .attachmentCount = 1,
-        .pAttachments = colorBlendAttachmentOverride ? colorBlendAttachmentOverride
-                                                     : &defaultColorBlendAttachment,
+        .pAttachments = (colorBlendAttachmentOverride != nullptr) ? colorBlendAttachmentOverride
+                                                                  : &defaultColorBlendAttachment,
     };
 
     std::vector<vk::DynamicState> dynamicStates = {
@@ -150,8 +149,8 @@ export struct VulkanPipeline {
         .pViewportState = &viewportState,
         .pRasterizationState = &rasterizer,
         .pMultisampleState = &multisampling,
-        .pDepthStencilState =
-            depthStencilStateOverride ? depthStencilStateOverride : &defaultDepthStencilState,
+        .pDepthStencilState = (depthStencilStateOverride != nullptr) ? depthStencilStateOverride
+                                                                     : &defaultDepthStencilState,
         .pColorBlendState = &colorBlending,
         .pDynamicState = &dynamicState,
         .layout = *pipelineLayout,

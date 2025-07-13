@@ -18,24 +18,28 @@ constexpr std::array layers = {validationLayerName};
 
 vk::Bool32 debugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                          vk::DebugUtilsMessageTypeFlagsEXT messageType,
-                         const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void *) {
+                         const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData,
+                         void * /*unused*/) {
   std::println("Validation Layer: {}\n", pCallbackData->pMessage);
-  return false;
+  return vk::False;
 }
 
 export struct VulkanInstance {
   vk::raii::Instance instance{nullptr};
   vk::raii::DebugUtilsMessengerEXT debugMessenger{nullptr};
 
-  bool IsExtensionAvailable(const ImVector<vk::ExtensionProperties> &properties,
-                            const char *extension) {
-    for (decltype(auto) p : properties)
-      if (std::strcmp(p.extensionName, extension) == 0)
+private:
+  static bool IsExtensionAvailable(const ImVector<vk::ExtensionProperties> &properties,
+                                   const char *extension) {
+    for (decltype(auto) property : properties) {
+      if (std::strcmp(property.extensionName, extension) == 0) {
         return true;
+      }
+    }
     return false;
   }
 
-  bool checkValidationLayerSupport(const vk::raii::Context &context) {
+  static bool checkValidationLayerSupport(const vk::raii::Context &context) {
     const auto availableLayers = context.enumerateInstanceLayerProperties();
     return std::ranges::all_of(layers, [&](const char *layer) {
       return std::ranges::any_of(availableLayers, [&](const auto &availableLayer) {
@@ -45,7 +49,7 @@ export struct VulkanInstance {
   }
 
 public:
-  VkInstance get_C_handle() const { return *instance; }
+  [[nodiscard]] VkInstance get_C_handle() const { return *instance; }
 
   // Access via ->
   auto operator->() { return &instance; }
@@ -73,7 +77,6 @@ public:
       return std::unexpected("Failed to create debug messenger: " +
                              vk::to_string(expected.error()));
     }
-    return {};
   }
 
   [[nodiscard]] std::expected<void, std::string> create() {
@@ -95,9 +98,10 @@ public:
     std::vector<const char *> extensions;
     {
       u32 sdl_extensions_count = 0;
-      auto sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extensions_count);
-      for (u32 n = 0; n < sdl_extensions_count; n++)
+      const auto *sdl_extensions = SDL_Vulkan_GetInstanceExtensions(&sdl_extensions_count);
+      for (u32 n = 0; n < sdl_extensions_count; n++) {
         extensions.push_back(sdl_extensions[n]);
+      }
     }
     extensions.push_back(vk::KHRSurfaceExtensionName);
 

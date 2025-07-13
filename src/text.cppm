@@ -8,6 +8,8 @@ module;
 #include <msdfgen.h>
 #include FT_FREETYPE_H
 
+#include <cstddef>
+
 export module vulkan_app:text;
 
 import :texture;
@@ -75,13 +77,13 @@ createFontAtlasMSDF(const std::string &fontPath, int pixelHeight) {
   FontAtlasData atlasData;
 
   msdfgen::FreetypeHandle *ftHandle = msdfgen::initializeFreetype();
-  if (!ftHandle) {
+  if (ftHandle == nullptr) {
     return std::unexpected("MSDFGEN: Failed to initialize Freetype handle");
   }
   ScopeGuard ftHandleGuard([&]() { msdfgen::deinitializeFreetype(ftHandle); });
 
   msdfgen::FontHandle *font = msdfgen::loadFont(ftHandle, fontPath.c_str());
-  if (!font) {
+  if (font == nullptr) {
     return std::unexpected("MSDFGEN: Failed to load font handle");
   }
   ScopeGuard fontGuard([&]() { msdfgen::destroyFont(font); });
@@ -115,9 +117,9 @@ createFontAtlasMSDF(const std::string &fontPath, int pixelHeight) {
   std::vector<msdf_atlas::GlyphGeometry> glyphs;
 
   for (char c_char : currentCharset) {
-    msdfgen::unicode_t c = static_cast<msdfgen::unicode_t>(c_char);
+    auto c = static_cast<msdfgen::unicode_t>(c_char);
     msdf_atlas::GlyphGeometry glyphGeometry;
-    const double geometryScale = 0.5; // This is a typical value, adjust if needed
+    const double geometryScale = 0.25; // This is a typical value, adjust if needed
     if (!glyphGeometry.load(font, geometryScale, c, true)) {
       std::cerr << "Warning: Could not load glyph geometry for character '" << c_char << "'\n";
       continue;
@@ -186,13 +188,14 @@ createFontAtlasMSDF(const std::string &fontPath, int pixelHeight) {
       generator(width, height);
 
   generator.setAttributes(attributes);
-  generator.setThreadCount(8);
+  generator.setThreadCount(12);
   std::println("DEBUG: Generating MTSDF atlas bitmap...");
   generator.generate(glyphs.data(), glyphs.size());
   std::println("DEBUG: Atlas bitmap generation complete.");
 
   msdfgen::BitmapConstRef<msdf_atlas::byte, 4> bitmap = generator.atlasStorage();
-  atlasData.atlasBitmap.assign(bitmap.pixels, bitmap.pixels + bitmap.width * bitmap.height * 4);
+  atlasData.atlasBitmap.assign(
+      bitmap.pixels, static_cast<ptrdiff_t>(bitmap.width * bitmap.height * 4) + bitmap.pixels);
 
   // --- Store Glyph Metrics ---
   std::println("DEBUG: Glyph metrics stored. Total glyphs: {}", glyphs.size());

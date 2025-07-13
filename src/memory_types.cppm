@@ -82,11 +82,11 @@ export struct VmaBuffer {
     allocationInfo_ = vma::AllocationInfo{};
   }
 
-  vk::Buffer get() const { return buffer_; }
-  vma::Allocation getAllocation() const { return allocation_; }
-  const vma::AllocationInfo &getAllocationInfo() const { return allocationInfo_; }
-  vk::DeviceSize getSize() const { return size_; }
-  void *getMappedData() const { return pMappedData_; }
+  [[nodiscard]] vk::Buffer get() const { return buffer_; }
+  [[nodiscard]] vma::Allocation getAllocation() const { return allocation_; }
+  [[nodiscard]] const vma::AllocationInfo &getAllocationInfo() const { return allocationInfo_; }
+  [[nodiscard]] vk::DeviceSize getSize() const { return size_; }
+  [[nodiscard]] void *getMappedData() const { return pMappedData_; }
 
   explicit operator bool() const { return buffer_ && allocation_; }
 };
@@ -97,7 +97,7 @@ export struct VmaImage {
   vma::Allocation allocation_ = nullptr;
   vma::AllocationInfo allocationInfo_{};
   vk::Format format_ = vk::Format::eUndefined;
-  vk::Extent3D extent_ = {0, 0, 0};
+  vk::Extent3D extent_ = {.width = 0, .height = 0, .depth = 0};
 
   VmaImage() = default;
 
@@ -115,7 +115,7 @@ export struct VmaImage {
     other.image_ = nullptr;
     other.allocation_ = nullptr;
     other.format_ = vk::Format::eUndefined;
-    other.extent_ = {0, 0, 0};
+    other.extent_ = {.width = 0, .height = 0, .depth = 0};
   }
 
   VmaImage &operator=(VmaImage &&other) noexcept {
@@ -132,7 +132,7 @@ export struct VmaImage {
       other.image_ = nullptr;
       other.allocation_ = nullptr;
       other.format_ = vk::Format::eUndefined;
-      other.extent_ = {0, 0, 0};
+      other.extent_ = {.width = 0, .height = 0, .depth = 0};
     }
     return *this;
   }
@@ -148,15 +148,15 @@ export struct VmaImage {
     image_ = nullptr;
     allocation_ = nullptr;
     format_ = vk::Format::eUndefined;
-    extent_ = {0, 0, 0};
+    extent_ = {.width = 0, .height = 0, .depth = 0};
     allocationInfo_ = vma::AllocationInfo{};
   }
 
-  vk::Image get() const { return image_; }
-  vma::Allocation getAllocation() const { return allocation_; }
-  const vma::AllocationInfo &getAllocationInfo() const { return allocationInfo_; }
-  vk::Format getFormat() const { return format_; }
-  vk::Extent3D getExtent() const { return extent_; }
+  [[nodiscard]] vk::Image get() const { return image_; }
+  [[nodiscard]] vma::Allocation getAllocation() const { return allocation_; }
+  [[nodiscard]] const vma::AllocationInfo &getAllocationInfo() const { return allocationInfo_; }
+  [[nodiscard]] vk::Format getFormat() const { return format_; }
+  [[nodiscard]] vk::Extent3D getExtent() const { return extent_; }
 
   explicit operator bool() const { return image_ && allocation_; }
 };
@@ -178,8 +178,7 @@ createVmaAllocator(vk::Instance instance, vk::PhysicalDevice physicalDevice, vk:
   vma::Allocator allocator_handle;
   vk::Result result = vma::createAllocator(&allocatorInfo, &allocator_handle);
   if (result != vk::Result::eSuccess) {
-    return std::unexpected("Failed to create VMA allocator: " +
-                           vk::to_string(static_cast<vk::Result>(result)));
+    return std::unexpected("Failed to create VMA allocator: " + vk::to_string(result));
   }
   return allocator_handle;
 }

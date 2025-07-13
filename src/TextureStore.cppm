@@ -97,7 +97,9 @@ public:
     // --- TEXTURE CREATION ---
     auto texResult = createTexture( // This is your existing createTexture from vulkan_app:texture
         device_, imageData.pixels.data(), imageData.pixels.size(),
-        vk::Extent3D{static_cast<u32>(imageData.width), static_cast<u32>(imageData.height), 1},
+        vk::Extent3D{.width = static_cast<u32>(imageData.width),
+                     .height = static_cast<u32>(imageData.height),
+                     .depth = 1},
         format, transferQueue_,
         true // generateMipmaps
     );
@@ -126,8 +128,9 @@ public:
     }
 
     // Create a 1x1 texture for the solid color
-    auto texResult = createTexture(device_, color.data(), color.size(), {1, 1, 1}, format,
-                                   transferQueue_, false);
+    auto texResult =
+        createTexture(device_, color.data(), color.size(), {.width = 1, .height = 1, .depth = 1},
+                      format, transferQueue_, false);
     if (texResult) {
       auto newTex = std::make_shared<Texture>(std::move(*texResult));
       loadedTextures_[colorHash] = newTex;
@@ -138,11 +141,15 @@ public:
     return defaultWhiteTexture_;
   }
 
-  std::shared_ptr<Texture> getDefaultTexture() const { return defaultWhiteTexture_; }
-  std::shared_ptr<Texture> getDefaultNormalTexture() const { return defaultNormalTexture_; }
-  std::shared_ptr<Texture> getDefaultMRTexture() const { return defaultMRTexture_; }
-  std::shared_ptr<Texture> getDefaultEmissiveTexture() const { return defaultEmissiveTexture_; }
-  PBRTextures getAllDefaultTextures() const {
+  [[nodiscard]] std::shared_ptr<Texture> getDefaultTexture() const { return defaultWhiteTexture_; }
+  [[nodiscard]] std::shared_ptr<Texture> getDefaultNormalTexture() const {
+    return defaultNormalTexture_;
+  }
+  [[nodiscard]] std::shared_ptr<Texture> getDefaultMRTexture() const { return defaultMRTexture_; }
+  [[nodiscard]] std::shared_ptr<Texture> getDefaultEmissiveTexture() const {
+    return defaultEmissiveTexture_;
+  }
+  [[nodiscard]] PBRTextures getAllDefaultTextures() const {
     return PBRTextures{
         .baseColor = defaultWhiteTexture_,
         .metallicRoughness = defaultMRTexture_,

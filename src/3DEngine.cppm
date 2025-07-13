@@ -7,11 +7,11 @@ module;
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+export module vulkan_app:ThreeDEngine;
+
 import vulkan_hpp;
 import std;
 import BS.thread_pool;
-
-export module vulkan_app:ThreeDEngine;
 
 import :VulkanDevice;
 import :VulkanPipeline;
@@ -28,52 +28,51 @@ import :VMA;
 namespace { // Anonymous namespace for internal helpers
 std::vector<Vertex> createAxisLineVertices(const glm::vec3 &start, const glm::vec3 &end,
                                            const glm::vec3 &normal_placeholder) {
-  return {{.pos = start, .normal = normal_placeholder, .uv = {0.0, 0.0}, .tangent = {1.0, 0.0, 0.0, 1.0}},
-          {.pos = end, .normal = normal_placeholder, .uv = {1.0, 0.0}, .tangent = {1.0, 0.0, 0.0, 1.0}}};
+  return {{.pos = start,
+           .normal = normal_placeholder,
+           .uv = {0.0, 0.0},
+           .tangent = {1.0, 0.0, 0.0, 1.0}},
+          {.pos = end,
+           .normal = normal_placeholder,
+           .uv = {1.0, 0.0},
+           .tangent = {1.0, 0.0, 0.0, 1.0}}};
 }
 std::vector<u32> createAxisLineIndices() { return {0, 1}; }
 } // namespace
 
 export class ThreeDEngine {
 private:
-    VulkanDevice& device_;
-    u32 frameCount_;
-    BS::thread_pool<>& thread_pool_; // Reference to the shared thread pool
+  VulkanDevice &device_;
+  u32 frameCount_;
+  BS::thread_pool<> &thread_pool_; // Reference to the shared thread pool
 
-    // Rendering Resources
-    std::vector<VulkanPipeline> graphicsPipelines_;
-    vk::raii::DescriptorSetLayout combinedMeshLayout_{ nullptr };
-    vk::raii::DescriptorSetLayout sceneLayout_{ nullptr };
-    std::vector<vk::raii::DescriptorSet> sceneDescriptorSets_;
+  // Rendering Resources
+  std::vector<VulkanPipeline> graphicsPipelines_;
+  vk::raii::DescriptorSetLayout combinedMeshLayout_{nullptr};
+  vk::raii::DescriptorSetLayout sceneLayout_{nullptr};
+  std::vector<vk::raii::DescriptorSet> sceneDescriptorSets_;
 
-    // UBOs
-    std::vector<VmaBuffer> sceneLightsUbos_;
-    SceneLightsUBO sceneLightsCpuBuffer_;
-    std::vector<VmaBuffer> shaderTogglesUbos_;
-    ShaderTogglesUBO shaderTogglesCpuBuffer_;
+  // UBOs
+  std::vector<VmaBuffer> sceneLightsUbos_;
+  SceneLightsUBO sceneLightsCpuBuffer_;
+  std::vector<VmaBuffer> shaderTogglesUbos_;
+  ShaderTogglesUBO shaderTogglesCpuBuffer_;
 
-    // Scene and Assets
-    Scene scene_;
-    std::unique_ptr<TextureStore> textureStore_;
-    std::vector<std::unique_ptr<Mesh>> appOwnedMeshes_;
-    Camera camera_;
+  // Scene and Assets
+  Scene scene_;
+  std::unique_ptr<TextureStore> textureStore_;
+  std::vector<std::unique_ptr<Mesh>> appOwnedMeshes_;
+  Camera camera_;
 
-    // Model Loading
-    std::vector<LoadedGltfScene> loadedGltfData_;
-    std::mutex loadedGltfDataMutex_;
+  // Model Loading
+  std::vector<LoadedGltfScene> loadedGltfData_;
+  std::mutex loadedGltfDataMutex_;
 
 public:
-    ThreeDEngine(VulkanDevice& device, u32 frameCount, BS::thread_pool<>& thread_pool)
-        : device_(device)
-        , frameCount_(frameCount)
-        , thread_pool_(thread_pool)
-        , scene_(frameCount)
-    {
-        textureStore_ = std::make_unique<TextureStore>(device, device.queue_);
-    }
-
-  ~ThreeDEngine() = default;
-
+  ThreeDEngine(VulkanDevice &device, u32 frameCount, BS::thread_pool<> &thread_pool)
+      : device_(device), frameCount_(frameCount), thread_pool_(thread_pool), scene_(frameCount) {
+    textureStore_ = std::make_unique<TextureStore>(device, device.queue_);
+  }
   // --- Public API ---
 
   std::expected<void, std::string> initialize(const vk::raii::RenderPass &renderPass,
@@ -97,10 +96,10 @@ public:
 
   void update(u32 frameIndex, float deltaTime, vk::Extent2D swapchainExtent) {
     camera_.updateVectors();
-    scene_.updateHierarchy(
-        frameIndex, camera_.GetViewMatrix(),
-        camera_.GetProjectionMatrix((float)swapchainExtent.width / (float)swapchainExtent.height),
-        deltaTime);
+    scene_.updateHierarchy(frameIndex, camera_.GetViewMatrix(),
+                           camera_.GetProjectionMatrix(static_cast<float>(swapchainExtent.width) /
+                                                       static_cast<float>(swapchainExtent.height)),
+                           deltaTime);
     scene_.updateAllDescriptorSetContents(frameIndex);
 
     // Update UBOs
@@ -248,18 +247,32 @@ private:
     vk::VertexInputBindingDescription bindingDescription{
         .binding = 0, .stride = sizeof(Vertex), .inputRate = vk::VertexInputRate::eVertex};
     std::array<vk::VertexInputAttributeDescription, 4> attributes = {{
-        {.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, pos)},
-        {.location = 1, .binding = 0, .format = vk::Format::eR32G32B32Sfloat, .offset = offsetof(Vertex, normal)},
-        {.location = 2, .binding = 0, .format = vk::Format::eR32G32Sfloat, .offset = offsetof(Vertex, uv)},
-        {.location = 3, .binding = 0, .format = vk::Format::eR32G32B32A32Sfloat, .offset = offsetof(Vertex, tangent)},
+        {.location = 0,
+         .binding = 0,
+         .format = vk::Format::eR32G32B32Sfloat,
+         .offset = offsetof(Vertex, pos)},
+        {.location = 1,
+         .binding = 0,
+         .format = vk::Format::eR32G32B32Sfloat,
+         .offset = offsetof(Vertex, normal)},
+        {.location = 2,
+         .binding = 0,
+         .format = vk::Format::eR32G32Sfloat,
+         .offset = offsetof(Vertex, uv)},
+        {.location = 3,
+         .binding = 0,
+         .format = vk::Format::eR32G32B32A32Sfloat,
+         .offset = offsetof(Vertex, tangent)},
     }};
     vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
         .vertexBindingDescriptionCount = 1,
         .pVertexBindingDescriptions = &bindingDescription,
         .vertexAttributeDescriptionCount = static_cast<u32>(attributes.size()),
         .pVertexAttributeDescriptions = attributes.data()};
-    vk::PipelineDepthStencilStateCreateInfo depthStencilState{
-        .depthTestEnable = vk::True, .depthWriteEnable = vk::True, .depthCompareOp = vk::CompareOp::eLess};
+    vk::PipelineDepthStencilStateCreateInfo depthStencilState{.depthTestEnable = vk::True,
+                                                              .depthWriteEnable = vk::True,
+                                                              .depthCompareOp =
+                                                                  vk::CompareOp::eLess};
     vk::PipelineColorBlendAttachmentState colorBlendAttachment{
         .blendEnable = vk::False,
         .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
